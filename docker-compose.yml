@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  addon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stremio_addon_app_vercel
+    ports:
+      - "7000:7000"
+    command: npm run dev
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - .:/app
+      - /app/node_modules # Cố định node_modules để sửa lỗi thiếu 'express'
+      - ~/.ssh/stremioaddon:/tmp/id_rsa:ro
+    environment:
+      - NODE_ENV=development
+      - PORT=7000
