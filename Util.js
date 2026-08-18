@@ -306,10 +306,10 @@ async function scrapeWithAPI(searchQuery, category, targetPage) {
         console.log(`[AXIOS FALLBACK CONNECT] Đang cào trang proxy thô: ${url}`);
 
         const response = await axios.get(url, {
-            timeout: 6000, // Thử nhanh trong 6 giây, nếu lỗi đổi proxy ngay
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            }
+            // timeout: 6000, // Thử nhanh trong 6 giây, nếu lỗi đổi proxy ngay
+            // headers: {
+            //     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            // }
         });
 
         if (response.data) {
