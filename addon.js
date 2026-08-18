@@ -10,7 +10,7 @@ const manifest = {
     id: "community.tpbconfigurableaddon",
     version: "4.0.0", // Nâng cấp phiên bản tích hợp TorBox
     name: "TPB Custom Filter Addon",
-    description: "Tìm kiếm torrent từ The Pirate Bay - Tự động quét cả 200 và 500 khi gõ thanh Search",
+    description: "Searching torrent from TPB",
     resources: ["stream", "catalog", "meta"], 
     types: ["movie", "series"],
     idPrefixes: ["tt", "tpb:"], 
@@ -19,21 +19,7 @@ const manifest = {
             id: "tpb_movies_catalog",
             type: "movie",
             name: "TPB Movies",
-            //genres: ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"],
-            
-            // 🌟 SỬA ĐỔI QUAN TRỌNG: Biến trường genres thành một Getter động
-            get genres() {
-                const showAdult = process.env.SHOW_ADULT_CONTENT || "false";
-                // Nếu showAdult là "true", gộp thêm mục "Adult 18+" vào cuối mảng, ngược lại giữ nguyên mảng gốc
-                return showAdult === "true" ? [...CORE_GENRES, "Adult 18+"] : CORE_GENRES;
-            },
-
-            // extra: [
-            //     { name: "search", isRequired: false },
-            //     { name: "genre", isRequired: false, options: ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"] }
-
-            // ] 
-
+            genres: CORE_GENRES, // Mặc định chỉ hiện phim thường
             // 🌟 MẤU CHỐT SỬA ĐỔI CHÍNH ĐỂ PHÂN TRANG HOẠT ĐỘNG TRÊN STREMIO:
             // Sử dụng cặp thuộc tính extraSupported và extraRequired thay thế hoàn toàn mảng extra cũ [1]
             extraSupported: ["search", "genre", "skip"], // BẮT BUỘC: Thêm "skip" vào đây để kích hoạt cuộn trang vô hạn
@@ -100,7 +86,8 @@ builder.defineCatalogHandler(async (args) => {
         console.log(`[CATALOG] CHẾ ĐỘ: Quét đồng thời cả 2 danh mục (200 + 500) trên The Pirate Bay...`);
 
 
-        tpbCategory = showAdultConfig? "200,500": "200";
+        tpbCategory = showAdultConfig == "true" ? "200,500" : "200";
+        console.log(`Test showAdultConfig - tpbCategory: ${showAdultConfig}`);
 
     } 
     // KỊCH BẢN 2: Người dùng chỉ DUYỆT THỂ LOẠI trên tab Discover (Không gõ từ khóa)

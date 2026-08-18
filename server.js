@@ -45,10 +45,38 @@ app.get(["/", "/configure"], (req, res) => {
 // ======================================================================
 // 3. ENDPOINT XUẤT MANIFEST GỐC (/MANIFEST.JSON)
 // ======================================================================
-app.get("/manifest.json", (req, res) => {
-    console.log("[SERVER] Xuất file manifest.json thô phục vụ kiểm tra hệ thống...");
+// app.get("/manifest.json", (req, res) => {
+//     console.log("[SERVER] Xuất file manifest.json thô phục vụ kiểm tra hệ thống...");
+//     res.setHeader("Content-Type", "application/json; charset=utf-8");
+//     return res.json(addonInterface.manifest);
+// });
+
+// ======================================================================
+// CẤU HÌNH PHÂN PHỐI MANIFEST ĐỘNG (ĐỒNG BỘ PC VÀ ĐIỆN THOẠI 100%)
+// ======================================================================
+app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    return res.json(addonInterface.manifest);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    // Lấy chuỗi cấu hình (Nếu người dùng gọi qua URL Stremio chuẩn có chứa tham số)
+    const configParam = req.params.config || req.url;
+    const decodedParam = decodeURIComponent(configParam);
+
+    // Tiến hành clone sâu (deep copy) đối tượng manifest gốc từ addon.js sang để xử lý biệt lập
+    let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
+
+    // 🌟 MẤU CHỐT BẺ KHÓA DI ĐỘNG:
+    // Nếu đường link URL thiết bị đang gọi thực sự chứa chuỗi show_adult=true
+    if (decodedParam.includes("show_adult=true")) {
+        console.log("[DYNAMIC MANIFEST] Kích hoạt và chèn tab Adult 18+ cho thiết bị hiện tại.");
+        
+        // 1. Thêm danh mục vào dải tab ngoài Discover
+        const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+        dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
+    }
+
+    // Trả dải dữ liệu JSON manifest hoàn hảo về cho Stremio Client cấu hình lập tức
+    return res.json(dynamicManifest);
 });
 
 // ======================================================================

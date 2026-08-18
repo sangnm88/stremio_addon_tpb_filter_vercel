@@ -37,7 +37,11 @@
             <span style="font-weight: bold; color: #ff3333;">Kích hoạt nội dung Người lớn (Adult 18+)</span>
         </div>
 
-        <button class="submit-btn" onclick="installAddon()">CÀI ĐẶT VÀO STREMIO</button>
+        <!-- CỤM NÚT BẤM CHỨC NĂNG SONG SONG -->
+        <div class="btn-group">
+            <button class="submit-btn" onclick="installAddon()">CÀI ĐẶT VÀO STREMIO</button>
+            <button class="copy-btn" id="copyBtn" onclick="copyManifestLink()">SAO CHÉP LINK MANIFEST</button>
+        </div>
     </div>
 
     <script>
@@ -56,6 +60,20 @@
                 eyeIcon.innerHTML = eyeOpenPath;
             }
         }
+        // Hàm chung dùng để sinh ra chuỗi cấu hình đường dẫn an toàn
+        // Trả về dạng: https://tên-miền/chuỗi_cấu_hình
+        function generateConfigUrl(protocolPrefix) {
+            const genre = document.getElementById("genre").value;
+            const token = document.getElementById("token").value || "none";
+            const showAdult = document.getElementById("adult_content").checked ? "true" : "false";
+            const currentHost = window.location.host;
+            
+            // Mã hóa Base64 an toàn cho dữ liệu Token
+            const encryptedToken = btoa(token).replace(/=/g, ""); 
+            const configPath = `default_genre=${genre}|torbox_token=${encryptedToken}|show_adult=${showAdult}`;
+            
+            return `${protocolPrefix}${currentHost}/${configPath}/manifest.json`;
+        }
 
         function installAddon() {
             const genre = document.getElementById("genre").value;
@@ -66,6 +84,28 @@
             const encryptedToken = btoa(token).replace(/=/g, ""); 
             const configPath = `default_genre=${genre}|torbox_token=${encryptedToken}|show_adult=${showAdult}`;
             window.location.href = `stremio://${currentHost}/${configPath}/manifest.json`;
+        }
+
+        // 🌟 HÀM MỚI: Xử lý đóng gói và sao chép link Manifest dạng https:// công khai
+        function copyManifestLink() {
+            const httpsUrl = generateConfigUrl("https://");
+            const copyBtn = document.getElementById("copyBtn");
+
+            // Sử dụng Clipboard API hiện đại của trình duyệt để nạp link vào bộ nhớ tạm
+            navigator.clipboard.writeText(httpsUrl).then(() => {
+                // Hiệu ứng đổi chữ và màu xanh lá cây báo thành công trực quan
+                copyBtn.innerText = "ĐÃ SAO CHÉP THÀNH CÔNG ✔";
+                copyBtn.classList.add("success");
+
+                // Trả về trạng thái nút bấm ban đầu sau 2.5 giây
+                setTimeout(() => {
+                    copyBtn.innerText = "SAO CHÉP LINK MANIFEST";
+                    copyBtn.classList.remove("success");
+                }, 2500);
+            }).catch(err => {
+                console.error("Lỗi trích xuất Clipboard:", err);
+                alert("Trình duyệt chặn quyền truy cập Clipboard. Hãy tự copy link này:\n" + httpsUrl);
+            });
         }
     </script>
 </body>
