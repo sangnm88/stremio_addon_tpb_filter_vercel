@@ -16,7 +16,7 @@ const isProduction = process.env.NODE_ENV === "production";
 //const PROWLARR_API_KEY = "09f131ca355a44528ff32a87e38e47fa"; // SỬA DÒNG NÀY: Điền API Key Prowlarr của bạn
 
 const MY_API = isProduction
-    ? "https://TÊN_DỰ_ÁN_VÀ_API_VERCEL_CỦA_BẠN.vercel.app/api" 
+    ? "https://tpb-vercel-scraper.vercel.app/api" 
     : "http://192.168.99.104:5050/api";
 
 // Lên Production gọi Serverless API trên Vercel, ở nhà gọi Container Docker Local
