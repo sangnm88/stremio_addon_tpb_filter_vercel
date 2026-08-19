@@ -63,7 +63,7 @@ app.get(["/", "/configure"], (req, res) => {
 // });
 
 // ======================================================================
-// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH ÉP BỘ LỌC EXTRA (ĐỒNG BỘ TV VÀ MOBILE)
+// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH KHỚP VỚI CẤU TRÚC V3-CINEMETA STREMIO
 // ======================================================================
 app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -75,45 +75,43 @@ app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     const configParam = req.params.config || req.url;
     const decodedParam = decodeURIComponent(configParam);
     
-    // Sao chép sâu đối tượng manifest gốc từ addon.js sang để xử lý biệt lập cho từng request
+    // Sao chép sâu đối tượng manifest gốc sang để xử lý độc lập cho từng phiên làm việc
     let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
 
-    // Kiểm tra trạng thái Checkbox của thiết bị hiện tại qua URL cấu hình
+    // Phân luồng ẩn/hiện mục Adult dựa theo cấu hình URL thiết bị
     if (decodedParam.includes("show_adult=true")) {
-        console.log("[MANIFEST COMPILER] Bật Adult: Nạp thêm tùy chọn 18+ vào bộ lọc Extra.");
+        console.log("[MANIFEST COMPILER] Bật Adult: Đồng bộ nạp thêm mục 18+");
         
-        // 1. Thêm vào mảng genres chính của catalog
         dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
         
-        // 2. ÉP ĐỒNG BỘ: Chèn mục Adult vào danh sách options của bộ lọc extra để Tivi vẽ giao diện
+        // 🌟 SỬA ĐỔI CHÍNH XÁC THEO CINEMETA: Thay toàn bộ "key" thành "name"
         dynamicManifest.catalogs[0].extra = [
             {
-                key: "genre",
-                options: [...CORE_GENRES, "Adult 18+"],
-                isRequired: false
+                name: "genre",
+                options: [...CORE_GENRES, "Adult 18+"]
             },
-            { key: "search", isRequired: false },
-            { key: "skip", isRequired: false }
+            { name: "search" },
+            { name: "skip" }
         ];
     } else {
-        console.log("[MANIFEST COMPILER] Tắt Adult: Cô lập bộ lọc chỉ chứa danh mục phim thường.");
+        console.log("[MANIFEST COMPILER] Tắt Adult: Cô lập danh mục rạp thường.");
         
-        // Nếu chọn tắt ẩn trên giao diện config, bốc hơi hoàn toàn mục Adult 18+ khỏi hệ thống của thiết bị này
         dynamicManifest.catalogs[0].genres = CORE_GENRES;
         
+        // Loại bỏ hoàn toàn chữ Adult 18+ khỏi mảng options tĩnh của thiết bị này
         dynamicManifest.catalogs[0].extra = [
             {
-                key: "genre",
-                options: CORE_GENRES, // Tuyệt đối không chứa chữ Adult 18+
-                isRequired: false
+                name: "genre",
+                options: CORE_GENRES
             },
-            { key: "search", isRequired: false },
-            { key: "skip", isRequired: false }
+            { name: "search" },
+            { name: "skip" }
         ];
     }
 
     return res.json(dynamicManifest);
 });
+
 
 // ======================================================================
 // 4. TRẠM TRUNG CHUYỂN VIDEO PROXY - FIX LỖI PLAYBACK ERROR
@@ -214,7 +212,7 @@ app.use((req, res, next) => {
             console.error("[MASTER ROUTER ERROR]", e.message);
         }
     }
-    
+
     const stremioRouter = getRouter(addonInterface); 
     stremioRouter(req, res, next);
 });

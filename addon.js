@@ -25,15 +25,14 @@ const manifest = {
             // Sử dụng cặp thuộc tính extraSupported và extraRequired thay thế hoàn toàn mảng extra cũ [1]
             extraSupported: ["search", "genre", "skip"], // BẮT BUỘC: Thêm "skip" vào đây để kích hoạt cuộn trang vô hạn
 
-            // 🌟 TUÂN THỦ TÀI LIỆU API: Khai báo mảng cấu trúc extra tĩnh chuẩn SDK
+            // 🌟 KHỚP CẤU TRÚC V3 CINEMETA JSON TOÀN DIỆN:
             extra: [
                 {
-                    key: "genre",
-                    options: ["All", "Action", "Comedy", "Horror", "Sci-Fi"],
-                    isRequired: false
+                    name: "genre",
+                    options: ["All", "Action", "Comedy", "Horror", "Sci-Fi"]
                 },
-                { key: "search", isRequired: false },
-                { key: "skip", isRequired: false }
+                { name: "search" },
+                { name: "skip" }
             ],
             extraRequired: [] // Không bắt buộc người dùng phải chọn thuộc tính nào mới hiện catalog [1]
 
