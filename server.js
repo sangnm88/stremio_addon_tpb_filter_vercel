@@ -84,12 +84,14 @@ app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     if (decodedParam.includes("show_adult=true")) {
         console.log("[DYNAMIC MANIFEST] Thiết bị bật Adult: Chèn thêm tab Adult 18+ vào menu.");
         // Nếu người dùng tích chọn kích hoạt, menu xổ xuống trên TV sẽ chứa đầy đủ 6 danh mục
-        dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
+        //dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
+        dynamicManifest.catalogs[0].genres = ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"];
+
     } else {
         console.log("[DYNAMIC MANIFEST] Thiết bị tắt Adult: Xóa bỏ hoàn toàn tab Adult 18+ khỏi menu.");
         // 🌟 NẾU LÀ FALSE: Trả về mảng chỉ chứa 5 thể loại thường. 
         // Ứng dụng Stremio trên TV/Điện thoại đọc file này sẽ KHÔNG BAO GIỜ vẽ mục Adult 18+ lên menu xổ xuống!
-        dynamicManifest.catalogs[0].genres = CORE_GENRES;
+        dynamicManifest.catalogs[0].genres = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
     }
 
     return res.json(dynamicManifest);
