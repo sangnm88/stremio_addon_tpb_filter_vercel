@@ -63,35 +63,53 @@ app.get(["/", "/configure"], (req, res) => {
 // });
 
 // ======================================================================
-// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH BIỆT LẬP (ĐỒNG BỘ 100% TV VÀ MOBILE)
+// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH ÉP BỘ LỌC EXTRA (ĐỒNG BỘ TV VÀ MOBILE)
 // ======================================================================
 app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    // Mảng thể loại phim rạp cốt lõi luôn luôn xuất hiện
+    // Mảng danh mục phim thường cốt lõi
     const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
 
-    // Bốc tách chuỗi cấu hình trực tiếp từ URL đường dẫn để tránh lỗi Cold Start của Vercel
     const configParam = req.params.config || req.url;
     const decodedParam = decodeURIComponent(configParam);
-
-    // Tiến hành sao chép sâu (deep copy) đối tượng manifest gốc từ addon.js sang để xử lý biệt lập
+    
+    // Sao chép sâu đối tượng manifest gốc từ addon.js sang để xử lý biệt lập cho từng request
     let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
 
-    // 🌟 MẤU CHỐT BẺ KHÓA MENU TIVI: 
-    // Ép trả về danh sách thể loại tĩnh hoàn toàn riêng biệt dựa vào trạng thái URL cài đặt
+    // Kiểm tra trạng thái Checkbox của thiết bị hiện tại qua URL cấu hình
     if (decodedParam.includes("show_adult=true")) {
-        console.log("[DYNAMIC MANIFEST] Thiết bị bật Adult: Chèn thêm tab Adult 18+ vào menu.");
-        // Nếu người dùng tích chọn kích hoạt, menu xổ xuống trên TV sẽ chứa đầy đủ 6 danh mục
-        //dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
-        dynamicManifest.catalogs[0].genres = ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"];
-
+        console.log("[MANIFEST COMPILER] Bật Adult: Nạp thêm tùy chọn 18+ vào bộ lọc Extra.");
+        
+        // 1. Thêm vào mảng genres chính của catalog
+        dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
+        
+        // 2. ÉP ĐỒNG BỘ: Chèn mục Adult vào danh sách options của bộ lọc extra để Tivi vẽ giao diện
+        dynamicManifest.catalogs[0].extra = [
+            {
+                key: "genre",
+                options: [...CORE_GENRES, "Adult 18+"],
+                isRequired: false
+            },
+            { key: "search", isRequired: false },
+            { key: "skip", isRequired: false }
+        ];
     } else {
-        console.log("[DYNAMIC MANIFEST] Thiết bị tắt Adult: Xóa bỏ hoàn toàn tab Adult 18+ khỏi menu.");
-        // 🌟 NẾU LÀ FALSE: Trả về mảng chỉ chứa 5 thể loại thường. 
-        // Ứng dụng Stremio trên TV/Điện thoại đọc file này sẽ KHÔNG BAO GIỜ vẽ mục Adult 18+ lên menu xổ xuống!
-        dynamicManifest.catalogs[0].genres = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+        console.log("[MANIFEST COMPILER] Tắt Adult: Cô lập bộ lọc chỉ chứa danh mục phim thường.");
+        
+        // Nếu chọn tắt ẩn trên giao diện config, bốc hơi hoàn toàn mục Adult 18+ khỏi hệ thống của thiết bị này
+        dynamicManifest.catalogs[0].genres = CORE_GENRES;
+        
+        dynamicManifest.catalogs[0].extra = [
+            {
+                key: "genre",
+                options: CORE_GENRES, // Tuyệt đối không chứa chữ Adult 18+
+                isRequired: false
+            },
+            { key: "search", isRequired: false },
+            { key: "skip", isRequired: false }
+        ];
     }
 
     return res.json(dynamicManifest);
@@ -167,45 +185,36 @@ app.get("/play/torbox/:hash/:token", async (req, res) => {
 app.use((req, res, next) => {
     const urlPath = req.path;
     
-    // Kiểm tra xem URL có chứa phân vùng token cấu hình hay không (Chấp nhận cả chuỗi chưa giải mã)
-    if (urlPath.includes("torbox_token=")) {
+    if (urlPath.includes("/catalog/") && urlPath.includes("torbox_token=")) {
         try {
-            // 🌟 MẤU CHỐT: Giải mã URL Encoding toàn cục
-            // Chuyển đổi chuỗi: /default_genre=All%7Ctorbox_token=xxx%7Cshow_adult=true/manifest.json
-            // Thành chuỗi sạch: /default_genre=All|torbox_token=xxx|show_adult=true/manifest.json
-
-            console.log(`[BEFORE DECODE SUCCESS] Chuỗi path trước khi giải mã: ${urlPath}`);
             const decodedPath = decodeURIComponent(urlPath);
-            //console.log(`[DECODE SUCCESS] Chuỗi path sau khi giải mã: ${decodedPath}`);
-
-            // Tiến hành bẻ gãy chuỗi phẳng theo dấu gạch đứng "|" như tư duy chính xác của bạn
             const URLParts = decodedPath.split("|");
+            
+            let showAdultVal = "false";
+            let torboxTokenVal = "none";
 
             URLParts.forEach(part => {
-                // Bẻ đôi cặp thuộc tính bằng dấu "="
                 const [key, value] = part.split("=");
-                
                 if (key && value) {
-                    // Nếu giá trị nằm ở cuối chuỗi và dính đuôi "/manifest.json", tách lấy phần chữ trước dấu "/"
-                    // Ví dụ: "true/manifest.json" -> split("/") sẽ lấy được phần tử đầu tiên là "true"
                     const cleanValue = value.split("/")[0].trim();
-
-                    if (key.includes("torbox_token") && cleanValue !== "none") {
-                        process.env.CURRENT_TORBOX_TOKEN = cleanValue;
-                        //console.log(`[PARSED VIP] CURRENT_TORBOX_TOKEN: ${process.env.CURRENT_TORBOX_TOKEN}`);
-                    }
-                    
-                    if (key.includes("show_adult")) {
-                        process.env.SHOW_ADULT_CONTENT = cleanValue.toLowerCase();
-                        //console.log(`[PARSED VIP] SHOW_ADULT_CONTENT: ${process.env.SHOW_ADULT_CONTENT}`);
-                    }
+                    if (key.includes("show_adult")) showAdultVal = cleanValue.toLowerCase();
+                    if (key.includes("torbox_token")) torboxTokenVal = cleanValue;
                 }
             });
-        } catch (err) {
-            console.error("[DECODE SPLIT ERROR] Lỗi rã chuỗi giải mã mạng:", err.message);
+
+            // Gộp tất cả tham số nhúng thẳng vào cấu trúc Catalog ID hệ thống
+            if (req.url.includes("tpb_movies_catalog.json")) {
+                req.url = req.url.replace(
+                    "tpb_movies_catalog.json", 
+                    `tpb_movies_catalog||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}.json`
+                );
+                console.log(`[MASTER ROUTER] Catalog ID Độc lập: ${req.url}`);
+            }
+        } catch (e) {
+            console.error("[MASTER ROUTER ERROR]", e.message);
         }
     }
-
+    
     const stremioRouter = getRouter(addonInterface); 
     stremioRouter(req, res, next);
 });

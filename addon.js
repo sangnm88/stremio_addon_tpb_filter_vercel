@@ -1,14 +1,14 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 const axios = require("axios");
 const { scrapeTPB, getProwlarrMetaByHash, getSmartMeta } = require("./Util");
-const { getTorBoxLink, checkTorBoxCacheBulk } = require("./torbox");
+const { getTorBoxLink, checkTorBoxCacheBulk, decryptToken } = require("./torbox");
 
 // Danh sách các thể loại phim cốt lõi luôn luôn hiển thị (Giữ nguyên của bạn)
 const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
 
 const manifest = {
     id: "community.tpbconfigurableaddon",
-    version: "5.0.0", // Nâng cấp phiên bản tích hợp  QRCode
+    version: "5.1.0", // Nâng cấp phiên bản tích hợp  QRCode
     name: "TPB Custom Filter Addon",
     description: "Searching torrent from TPB",
     resources: ["stream", "catalog", "meta"], 
@@ -24,6 +24,17 @@ const manifest = {
             // 🌟 MẤU CHỐT SỬA ĐỔI CHÍNH ĐỂ PHÂN TRANG HOẠT ĐỘNG TRÊN STREMIO:
             // Sử dụng cặp thuộc tính extraSupported và extraRequired thay thế hoàn toàn mảng extra cũ [1]
             extraSupported: ["search", "genre", "skip"], // BẮT BUỘC: Thêm "skip" vào đây để kích hoạt cuộn trang vô hạn
+
+            // 🌟 TUÂN THỦ TÀI LIỆU API: Khai báo mảng cấu trúc extra tĩnh chuẩn SDK
+            extra: [
+                {
+                    key: "genre",
+                    options: ["All", "Action", "Comedy", "Horror", "Sci-Fi"],
+                    isRequired: false
+                },
+                { key: "search", isRequired: false },
+                { key: "skip", isRequired: false }
+            ],
             extraRequired: [] // Không bắt buộc người dùng phải chọn thuộc tính nào mới hiện catalog [1]
 
         }
@@ -51,15 +62,30 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// ==========================================
-// XỬ LÝ CATALOG HANDLER (TỰ ĐỘNG GỘP 200 + 500 KHI SEARCH)
-// ==========================================
+
+let showAdultConfig = "false";
+let IS_TORBOX_VIP =  "false";
+let userToken = "none";
+// ======================================================================
+// 1. LUỒNG XỬ LÝ CATALOG DANH MỤC PHIM (RÃ GÓI TỔNG HỢP TỪ ARGS.ID)
+// ======================================================================
 builder.defineCatalogHandler(async (args) => {
     console.log(`[CATALOG] Đang gọi danh mục: ${args.id}`);
 
-    // 🌟 CHÈN LUỒNG KIỂM TRA BẢO MẬT ADULT: 
-    // Nếu catalog yêu cầu thuộc tính Adult 18+ mà biến cấu hình là "false", lập tức chặn không cho hiển thị
-    const showAdultConfig = process.env.SHOW_ADULT_CONTENT || "false";
+    // Rã mảng tổng hợp từ Catalog ID
+    // Chuỗi args.id cấu trúc: tpb_movies_catalog||show_adult=true/false||torbox_token=xxx
+    const idParts = args.id.split("||");
+
+
+    idParts.forEach(part => {
+        if (part.includes("show_adult=true")) showAdultConfig = "true";
+        if (part.includes("torbox_token=")) {
+            userToken = part.split("=")[1] || "none";
+        }
+    });
+
+    console.log(`[CATALOG] showAdultConfig : ${showAdultConfig} userToken: ${userToken}`);
+    
     // Nếu người dùng cố tình tìm cách truy cập tab Adult khi cấu hình đang tắt, chặn đứng lập tức
     if (args.extra?.genre === "Adult 18+" && showAdultConfig !== "true") {
         console.log("[SECURITY BLOCK] Chặn truy cập danh mục Adult 18+ theo cấu hình hệ thống.");
@@ -115,8 +141,8 @@ builder.defineCatalogHandler(async (args) => {
         const pagePromises = [
             scrapeTPB(searchQuery, tpbCategory, basePage),
             scrapeTPB(searchQuery, tpbCategory, basePage + 1),
-            //scrapeTPB(searchQuery, tpbCategory, basePage + 2),
-            //scrapeTPB(searchQuery, tpbCategory, basePage + 3)
+            scrapeTPB(searchQuery, tpbCategory, basePage + 2),
+            scrapeTPB(searchQuery, tpbCategory, basePage + 3)
         ];
 
         const pagesResults = await Promise.all(pagePromises);
@@ -221,7 +247,7 @@ builder.defineStreamHandler(async (args) => {
         }
 
         const pureHash = info.hash; // Lấy mã hash sạch đã rã gói
-        const userTorBoxToken = process.env.CURRENT_TORBOX_TOKEN || "none";
+        const userTorBoxToken = userToken || "none";// process.env.CURRENT_TORBOX_TOKEN || "none";
         const currentHost = process.env.HOST_URL || "localhost:7000";
 
 
@@ -239,7 +265,7 @@ builder.defineStreamHandler(async (args) => {
         let dynamicName = `${emoji}`;
 
         // KIỂM TRA TRẠNG THÁI CACHED THỰC TẾ TRÊN HỆ THỐNG TORBOX
-        if (userTorBoxToken && userTorBoxToken !== "none") {
+        if (userTorBoxToken && decryptToken(userTorBoxToken) !== "none") {
             try {
                 // Gọi hàm check bulk đơn lẻ tốc độ cao từ TorBox.js của bạn
                 const cacheMap = await checkTorBoxCacheBulk(pureHash, userTorBoxToken);
@@ -318,13 +344,13 @@ builder.defineStreamHandler(async (args) => {
     }
 
     // Lấy mã Token của TorBox trích xuất từ URL chạy ngầm
-    const userTorBoxToken = process.env.CURRENT_TORBOX_TOKEN || "none";
+    const userTorBoxToken = userToken || "none";
     const currentHost = process.env.HOST_URL || "localhost:7000";
 
     // ======================================================================
     // KỊCH BẢN A: NGƯỜI DÙNG KHÔNG CÓ TORBOX VIP (KHÔNG NHẬP KEY / CHẠY TORRENT THƯỜNG)
     // ======================================================================
-    if (!userTorBoxToken || userTorBoxToken === "none") {
+    if (!userTorBoxToken || decryptToken(userTorBoxToken) === "none") {
         console.log(`[STREAM P2P] Không phát hiện cấu hình TorBox VIP. Trả về luồng phát Torrent truyền thống...`);
 
         allStreams = allStreams.map(stream => {

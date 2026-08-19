@@ -295,4 +295,4 @@ async function getTorBoxLink(infoHash, torboxToken, magnetLink) {
     }
 }
 
-module.exports = { getTorBoxLink, checkTorBoxCacheBulk };
+module.exports = { getTorBoxLink, checkTorBoxCacheBulk, decryptToken};
