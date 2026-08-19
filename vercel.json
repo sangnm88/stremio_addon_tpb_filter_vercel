@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "routes": [
-    { "src": "/style.css", "dest": "style.css" },
-    { "src": "/script.js", "dest": "script.js" },
-    { "src": "/qrcode.js", "dest": "qrcode.js" }, // 🌟 THÊM DÒNG NÀY
-    { "src": "/(.*)", "dest": "server.js" }
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/server.js"
+    }
   ]
 }
