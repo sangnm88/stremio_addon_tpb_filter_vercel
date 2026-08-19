@@ -3,7 +3,7 @@
   "routes": [
     { "src": "/style.css", "dest": "style.css" },
     { "src": "/script.js", "dest": "script.js" },
-    { "src": "/qrcode.min.js", "dest": "qrcode.min.js" }, // 🌟 THÊM DÒNG NÀY
+    { "src": "/qrcode.min.js", "dest": "qrcode.js" }, // 🌟 THÊM DÒNG NÀY
     { "src": "/(.*)", "dest": "server.js" }
   ]
 }
