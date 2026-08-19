@@ -27,6 +27,17 @@ app.get("/style.css", (req, res) => {
     res.setHeader("Content-Type", "text/css; charset=utf-8");
     res.sendFile(path.join(__dirname, "style.css"));
 });
+// Mở endpoint cấp tệp tĩnh script.js ra internet công khai
+app.get("/script.js", (req, res) => {
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.sendFile(path.join(__dirname, "script.js"));
+});
+
+// Mở endpoint cấp tệp tĩnh qrcode.js ra internet công khai
+app.get("/qrcode.js", (req, res) => {
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    res.sendFile(path.join(__dirname, "qrcode.js"));
+});
 
 // ======================================================================
 // 1. GIAO DIỆN CẤU HÌNH - ĐỌC TỪ FILE CONFIGURE.HTML RIÊNG BIỆT
@@ -52,30 +63,35 @@ app.get(["/", "/configure"], (req, res) => {
 // });
 
 // ======================================================================
-// CẤU HÌNH PHÂN PHỐI MANIFEST ĐỘNG (ĐỒNG BỘ PC VÀ ĐIỆN THOẠI 100%)
+// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH BIỆT LẬP (ĐỒNG BỘ 100% TV VÀ MOBILE)
 // ======================================================================
 app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    // Lấy chuỗi cấu hình (Nếu người dùng gọi qua URL Stremio chuẩn có chứa tham số)
+    // Mảng thể loại phim rạp cốt lõi luôn luôn xuất hiện
+    const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+
+    // Bốc tách chuỗi cấu hình trực tiếp từ URL đường dẫn để tránh lỗi Cold Start của Vercel
     const configParam = req.params.config || req.url;
     const decodedParam = decodeURIComponent(configParam);
 
-    // Tiến hành clone sâu (deep copy) đối tượng manifest gốc từ addon.js sang để xử lý biệt lập
+    // Tiến hành sao chép sâu (deep copy) đối tượng manifest gốc từ addon.js sang để xử lý biệt lập
     let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
 
-    // 🌟 MẤU CHỐT BẺ KHÓA DI ĐỘNG:
-    // Nếu đường link URL thiết bị đang gọi thực sự chứa chuỗi show_adult=true
+    // 🌟 MẤU CHỐT BẺ KHÓA MENU TIVI: 
+    // Ép trả về danh sách thể loại tĩnh hoàn toàn riêng biệt dựa vào trạng thái URL cài đặt
     if (decodedParam.includes("show_adult=true")) {
-        console.log("[DYNAMIC MANIFEST] Kích hoạt và chèn tab Adult 18+ cho thiết bị hiện tại.");
-        
-        // 1. Thêm danh mục vào dải tab ngoài Discover
-        const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+        console.log("[DYNAMIC MANIFEST] Thiết bị bật Adult: Chèn thêm tab Adult 18+ vào menu.");
+        // Nếu người dùng tích chọn kích hoạt, menu xổ xuống trên TV sẽ chứa đầy đủ 6 danh mục
         dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
+    } else {
+        console.log("[DYNAMIC MANIFEST] Thiết bị tắt Adult: Xóa bỏ hoàn toàn tab Adult 18+ khỏi menu.");
+        // 🌟 NẾU LÀ FALSE: Trả về mảng chỉ chứa 5 thể loại thường. 
+        // Ứng dụng Stremio trên TV/Điện thoại đọc file này sẽ KHÔNG BAO GIỜ vẽ mục Adult 18+ lên menu xổ xuống!
+        dynamicManifest.catalogs[0].genres = CORE_GENRES;
     }
 
-    // Trả dải dữ liệu JSON manifest hoàn hảo về cho Stremio Client cấu hình lập tức
     return res.json(dynamicManifest);
 });
 

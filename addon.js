@@ -19,7 +19,8 @@ const manifest = {
             id: "tpb_movies_catalog",
             type: "movie",
             name: "TPB Movies",
-            genres: CORE_GENRES, // Mặc định chỉ hiện phim thường
+            // 🌟 SỬA ĐỔI MẤU CHỐT 1: Khai báo mảng tĩnh đầy đủ để ÉP Tivi/Điện thoại hiển thị thanh menu chọn thể loại
+            genres: ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"],
             // 🌟 MẤU CHỐT SỬA ĐỔI CHÍNH ĐỂ PHÂN TRANG HOẠT ĐỘNG TRÊN STREMIO:
             // Sử dụng cặp thuộc tính extraSupported và extraRequired thay thế hoàn toàn mảng extra cũ [1]
             extraSupported: ["search", "genre", "skip"], // BẮT BUỘC: Thêm "skip" vào đây để kích hoạt cuộn trang vô hạn
