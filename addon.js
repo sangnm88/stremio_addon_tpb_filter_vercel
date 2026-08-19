@@ -8,7 +8,7 @@ const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
 
 const manifest = {
     id: "community.tpbconfigurableaddon",
-    version: "4.0.0", // Nâng cấp phiên bản tích hợp TorBox
+    version: "5.0.0", // Nâng cấp phiên bản tích hợp  QRCode
     name: "TPB Custom Filter Addon",
     description: "Searching torrent from TPB",
     resources: ["stream", "catalog", "meta"], 
