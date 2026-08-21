@@ -320,11 +320,11 @@ async function scrapeWithAPI(searchQuery, category, targetPage) {
 
 
 
-            const torrents = response.data; 
+            const torrents = await VerifyPackageData(response.data); 
             //console.log(`Message : ${torrents.message}`);
-            console.log(`Page:  ${targetPage} | Dữ liệu thô từ scrapeWithAPI: ${JSON.stringify(torrents.data, null, 2)} `)
+            //console.log(`Page:  ${targetPage} | Dữ liệu thô từ scrapeWithAPI: ${JSON.stringify(torrents, null, 2)} `)
 
-            return torrents.data;
+            return torrents;
         }
     } catch (err) {
         console.warn(`[AXIOS WARNING] Nguồn ${MY_API} thất bại (${err.message}).`);
@@ -373,7 +373,8 @@ async function getSmartMeta(type, argsId) {
     let indexer = idParts[5] || "TPB";
     let resolution = idParts[6] || "1080p";
     let imdbIdFromProwlarr = idParts[7] || "none"; // Bóc mã IMDb ID được đóng gói
-
+    //let cached = idParts[8] || false; // true/false
+    //let urlDirect = idParts[9] || "none";
     try {
 
         // 🚀 ƯU TIÊN 1: Nếu Prowlarr cấp mã IMDb ID hợp lệ, gọi thẳng Cinemeta tra cứu thông tin chuẩn rạp
@@ -410,7 +411,7 @@ async function getSmartMeta(type, argsId) {
         return {
             hash: pureHash,
             name: title,
-            title: `👤 S: ${seeders} | 👥 L: ${leechers}\n📦 Dung lượng: ${size} GB\n🔌 Nguồn: Prowlarr (${indexer || "TPB"})`,
+            title: `👤 S: ${seeders} | 👥 L: ${leechers}\n📦 Dung lượng: ${size} GB\n🔌 Nguồn: (${indexer || "TPB"})`,
             year: extractedYear,
             imdbRating: "7.5",
             genres: [resolution, "Torrent", indexer],
@@ -539,6 +540,102 @@ function parseHtmlToTorrents(htmlData) {
 
         console.log(`[CELL PARSER SUCCESS] Trích xuất thành công ${torrents.length} dòng phim dựa trên thuật toán sơ đồ 8 cột.`);
         return torrents;
+
+    } catch (parseErr) {
+        console.error("[PARSE COLUMNS ERROR] Thất bại xử lý mảng ô dữ liệu td:", parseErr.message);
+        return [];
+    }
+}
+
+//Hàm kiểm tra dữ liệu đầu vào đã được xử lý chưa
+function VerifyPackageData(rawData) {
+    let responseData = [];
+    if (!rawData || typeof rawData !== "string")
+        if(responseData.some(s => 'packedData' in s)) return rawData;
+
+    responseData = rawData.data;
+
+    //Nếu dữ liệu đã tồn tại biến packedData: tạm cho là đã được verify nên bỏ qua không cần check lại
+    if (responseData && responseData.some(s => 'packedData' in s) ) return responseData;
+    try {
+
+        let torrents = [];
+        // Duyệt qua từng dòng tr trong bảng kết quả tìm kiếm (Bỏ qua dòng tiêu đề index = 0)
+        const verifiedData =   responseData.map(t => {
+
+                const title = t.name;
+                const size = t.size;
+                let sizeInGB = "0.00";
+                
+                let sizeVal = "0.00";
+                let sizeUnit = "";
+                //const sizeUnit = sizeMatch[2].toUpperCase();
+                //sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
+                // Xử lý chuỗi dung lượng bằng Regex (Ví dụ: "4.5 GiB" hoặc "450 MiB")
+                const sizeMatch = size.match(/(\d+\.\d+|\d+)\s*(GiB|MiB|GB|MB)/i);
+                if (sizeMatch) {
+                    sizeVal = parseFloat(sizeMatch[1]);
+                    sizeUnit = sizeMatch[2].toUpperCase() || "";
+                    sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
+                }
+                else {
+                    sizeVal = parseFloat(size);
+                    sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
+                }
+                //sizeInGB = (sizeVal / 1024).toFixed(2);
+
+                const seeders = t.seeders;
+                const leechers = t.leechers;
+
+                // 🌟 5. TRÍCH XUẤT MÃ BẰM INFOHASH VIẾT THƯỜNG TỪ LUỒNG MAGNET LINK
+                let infoHash = t.info_hash;
+      
+
+                const indexer = "The Pirate Bay";
+
+                if (!infoHash) return;
+
+                let magnetUrl = "";
+                // Nếu thiếu magnet, tự dựng magnet chuẩn bằng infoHash
+                if (!magnetUrl) {
+                    magnetUrl = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}`;
+                }
+
+                // 🌟 6. TỰ ĐỘNG PHÂN TÁCH ĐỘ PHÂN GIẢI (RESOLUTION) TỪ TIÊU ĐỀ
+                let resolution = "1080p"; 
+                const titleUpper = title.toUpperCase();
+                if (titleUpper.includes("4K") || titleUpper.includes("2160P") || titleUpper.includes("UHD")) {
+                    resolution = "4K";
+                } else if (titleUpper.includes("1080P") || titleUpper.includes("FHD") || titleUpper.includes("BLURAY")) {
+                    resolution = "1080p";
+                } else if (titleUpper.includes("720P") || titleUpper.includes("HD")) {
+                    resolution = "720p";
+                } else if (titleUpper.includes("SD") || titleUpper.includes("CAM") || titleUpper.includes("DVD")) {
+                    resolution = "SD";
+                }
+
+                let rawImdb = t.imdb;
+
+                // Ngăn cách bằng ký tự đặc biệt "||" để dễ bóc tách bằng lệnh .split() sau này
+                const packedData = `${title}||${sizeInGB}||${seeders}||${leechers}||${indexer}||${resolution}||${rawImdb}`;
+                const cleanHash = infoHash;
+                console.log(`[UTIL DEBUG] packedData: ${packedData} ` );
+
+                return {
+                    packedData : packedData,// Gửi chuỗi đóng gói vào trường name
+                    name: title, 
+                    title: `👤 Seeders: ${seeders} | 👥 Leechers: ${leechers}\n📦 Dung lượng: ${sizeInGB} GB\n🔌 Nguồn: (${indexer || "TPB"})`,
+                    infoHash: cleanHash,
+                    magnet: magnetUrl || `magnet:?xt=urn:btih:${cleanHash}`,
+                    resolution: resolution,
+                    seeders: seeders // Giữ lại biến số phục vụ thuật toán Sort
+                };
+            });
+            
+            torrents = verifiedData;
+
+            console.log(`[CELL PARSER SUCCESS] Trích xuất thành công ${torrents.length} dòng phim dựa trên thuật toán sơ đồ 8 cột.`);
+            return torrents;
 
     } catch (parseErr) {
         console.error("[PARSE COLUMNS ERROR] Thất bại xử lý mảng ô dữ liệu td:", parseErr.message);

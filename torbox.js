@@ -22,7 +22,7 @@ function decryptToken(tokenInput) {
         base64Str = base64Str.padEnd(base64Str.length + (4 - base64Str.length % 4) % 4, '=');
         
         const decrypted = Buffer.from(base64Str, 'base64').toString('utf8');
-        console.log(`Mã token: ${decrypted}`)
+        //console.log(`Mã token: ${decrypted}`)
         return decrypted.trim();
     } catch (e) {
         console.warn("[TORBOX DECRYPT WARNING] Không thể giải mã chuỗi, thử dùng Token thô gốc:", e.message);
@@ -98,7 +98,7 @@ async function checkMyTorrentsBulk(hashInput, torboxToken) {
 async function checkTorBoxCacheBulk(hashInput, torboxToken) {
     if (!torboxToken || torboxToken === "none") return {};
     
-     // 🌟 Tự động bẻ khóa Token ngay đầu hàm check cached
+    // Tự động bẻ khóa Token ngay đầu hàm check cached
     const cleanToken = decryptToken(torboxToken);
     if (!cleanToken || cleanToken === "none") return {};
 
@@ -130,32 +130,32 @@ async function checkTorBoxCacheBulk(hashInput, torboxToken) {
         const lowerCaseCacheData = {};
         
         Object.keys(apiCacheData).forEach(key => {
-            // ĐÃ SỬA LỖI TẠI ĐÂY: Gán chuẩn xác giá trị dựa theo biến apiCacheData
             lowerCaseCacheData[key.toLowerCase()] = apiCacheData[key];
         });
 
         // 3. Xử lý và chuẩn hóa dữ liệu Danh sách tài khoản cá nhân (My Torrent)
         const myTorrentsList = myListRes.data?.data || [];
         const accountHashMap = {};
-        
+
         myTorrentsList.forEach(t => {
             if (t.hash) {
-                // Lưu lại thông tin ID và đối tượng torrent cá nhân theo Key là mã hash viết thường
                 accountHashMap[t.hash.toLowerCase()] = t;
             }
         });
 
         const cacheMap = {};
 
-        // 4. Duyệt qua danh sách mã băm ban đầu để gộp dữ liệu thông minh
-        cleanHashArray.forEach(hash => {
+        // 🌟 GIẢI PHÁP SỬA LỖI MẤU CHỐT: Sử dụng .map() kết hợp async/await để tạo mảng các Promise chạy song song
+        // Thay thế hoàn toàn vòng lặp forEach cũ bị lỗi SyntaxError
+        const processPromises = cleanHashArray.map(async (hash) => {
             const cacheResult = lowerCaseCacheData[hash];
-            const accountResult = accountHashMap[hash]; // Kiểm tra xem hash này có trong tài khoản không
+            const accountResult = accountHashMap[hash]; 
             
-            // Khởi tạo các giá trị mặc định cho form biểu mẫu
             let isCached = false;
             let torrentName = "";
             let torrentSize = 0;
+            
+            console.log(`cacheResult: ${JSON.stringify(cacheResult, null, 2)}`);
 
             // Bóc tách thông tin từ System Cache nếu có
             if (cacheResult !== undefined && cacheResult !== null) {
@@ -167,35 +167,141 @@ async function checkTorBoxCacheBulk(hashInput, torboxToken) {
                 } else if (typeof cacheResult === 'object' && !Array.isArray(cacheResult)) {
                     isCached = cacheResult.cached !== undefined ? cacheResult.cached === true : true;
                     torrentName = cacheResult.name || cacheResult.title || "";
-                    torrentSize = cacheResult.size !== undefined ? cacheResult.size : (cacheResult.sizee || 0);
+                    torrentSize = cacheResult.size !== undefined ? cacheResult.size : (cacheResult.size || 0);
                 } else {
                     isCached = cacheResult === true;
                 }
             }
 
-            // Nếu cache hệ thống trống nhưng trong tài khoản cá nhân đã có, ta lấy tên/size từ tài khoản đắp vào
+            // Nếu cache hệ thống trống nhưng trong tài khoản cá nhân đã có, ta lấy thông tin từ tài khoản đắp vào
             if (accountResult) {
                 if (!torrentName) torrentName = accountResult.name || "";
                 if (!torrentSize) torrentSize = accountResult.size || 0;
             }
 
-            // ĐÓNG GÓI GỘP DỮ LIỆU ĐẦY ĐỦ THÔNG TIN
+            // TIẾN TRÌNH LẤY LINK TRỰC TIẾP BIỆT LẬP CHO TỪNG HASH
+            let urlDirect = "none";
+            let activeTorrentId = accountResult ? accountResult.id : null;
+            let inAccountStatus = accountResult !== undefined;
+
+
+            // Nếu addon không truyền magnet sang, tự dựng magnet thô làm dự phòng
+            const finalMagnet = `magnet:?xt=urn:btih:${hash}`;
+
+            console.log(`cacheResult 2: ${JSON.stringify(cacheResult, null, 2)}`);
+
+            // TRƯỜNG HỢP 1: PHIM ĐÃ CACHED SẴN (🟢) -> TIẾN HÀNH GẮP LINK TRỰC TIẾP TRONG 0MS
+            if (isCached) {
+                try {
+                    // 1. Gọi API add nhanh vào tài khoản cá nhân dưới dạng Form x-www-form-urlencoded chuẩn chống lỗi 400
+                    const formPayload = new URLSearchParams();
+                    formPayload.append("magnet", `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(torrentName)}`);
+                    formPayload.append("as_queued", "false");
+
+                    const addRes = await axios.post(
+                        `${BASE_URL}/torrents/createtorrent`, 
+                        formPayload, 
+                        { 
+                            headers: {
+                                'Authorization': `Bearer ${cleanToken}`,
+                                'Content-Type': 'application/x-www-form-urlencoded'
+                            }, 
+                            timeout: 5000 
+                        }
+                    );
+
+                    const activeTorrentId = addRes.data?.data?.torrent_id;
+
+                    // 2. Gọi API mylist bốc thẳng mảng dữ liệu file thực tế (Khớp cấu thực json không có .files của bạn)
+                    if (activeTorrentId) {
+                        const filesResponse = await axios.get(`${BASE_URL}/torrents/mylist?id=${activeTorrentId}`, { headers, timeout: 4000 });
+                        // Đối tượng gốc trả về nằm trong trường .data (Chứa các thuộc tính id, hash, name, files...)
+                        const torrentObject = filesResponse.data?.data;
+                        // Truy cập chính xác vào thuộc tính .files lồng bên trong Object gốc như log debug của bạn
+                        const filesList = torrentObject?.files || [];
+
+                        console.log(`filesList: ${JSON.stringify(filesList, null, 2)}`);
+
+                        if (Array.isArray(filesList) && filesList.length > 0) {
+                            let mainVideoFile = filesList[0];
+                            
+                            // Tìm kiếm tệp tin phim chính nặng nhất trong mảng
+                            filesList.forEach(file => {
+                                if (file.size && mainVideoFile.size && file.size > mainVideoFile.size) {
+                                    mainVideoFile = file;
+                                }
+                            });
+
+
+                            // 🌟 BƯỚC C SỬA ĐỒNG BỘ: Ép kiểu Số nguyên nghiêm ngặt cho Torrent ID và File ID để đập tan lỗi 422
+                            const cleanTorrentId = parseInt(activeTorrentId);
+                            const cleanFileId = parseInt(mainVideoFile.id);
+
+                            console.log(`[REQUEST_DL EXECUTE] Đang xin link trực tiếp từ CDN - Torrent ID: ${cleanTorrentId} | File ID: ${cleanFileId}`);
+
+                            const queryDlUrl = `${BASE_URL}/torrents/requestdl?token=${encodeURIComponent(cleanToken)}&torrent_id=${cleanTorrentId}&file_id=${cleanFileId}&zip_link=false&append_name=true`;
+                            
+                            console.log(`[TORBOX BULK LOG] Đang bốc JSON link từ URL tham số thô: ${queryDlUrl}`);
+
+                            // Thực hiện gọi hàm get thông thường không kèm header bảo mật để lấy chuỗi dữ liệu
+                            const dlResponse = await axios.get(queryDlUrl, { timeout: 4000 });
+                            
+                            const rawDownloadLink = dlResponse.data?.data;
+                            //console.log(`rawDownloadLink: ${rawDownloadLink}`);
+
+                            if (rawDownloadLink) {
+                                // Mã hóa Base64 link kết quả để an toàn khi đẩy vào chuỗi ID của Card Stremio
+                                urlDirect = btoa(rawDownloadLink).replace(/=/g, "");
+                                console.log(`[REQUEST_DL SUCCESS] Gắp thành công link trực tiếp: ${rawDownloadLink}`);
+                            }
+
+                        }
+                    }
+                } catch (innerErr) {
+                    console.warn(`[VIP DIRECT FETCH ERROR] Thất bại gắp link tại hash [${hash}]:`, innerErr.message);
+                }
+            }
+
+            // // TRƯỜNG HỢP 2: PHIM CHƯA CACHED (⚫) -> TỰ ĐỘNG BẮN LỆNH KÉO HẠT NGẦM VỀ CLOUD TORBOX
+            // if (!isCached) {
+            //     // Sử dụng hàm chạy ngầm (Non-blocking background call) để không làm treo giao diện lướt phim của Tivi
+            //     const formPayload = new URLSearchParams();
+            //     formPayload.append("magnet", `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(torrentName || "Movie")}`);
+            //     formPayload.append("as_queued", "false"); // Ra lệnh cho Bot TorBox cắm hạt tải ngay lập tức
+
+            //     axios.post(`${BASE_URL}/torrents/createtorrent`, formPayload, {
+            //         headers: {
+            //             'Authorization': `Bearer ${cleanToken}`,
+            //             'Content-Type': 'application/x-www-form-urlencoded' // Ép định dạng Form chuẩn chống lỗi 400
+            //         },
+            //         timeout: 5000
+            //     }).then((resAdd) => {
+            //         console.log(`[BACKGROUND CLOUD CACHING] Kích hoạt kéo ngầm thành công cho hash [${hash}] | ID: ${resAdd.data?.data?.torrent_id}`);
+            //     }).catch((errAdd) => {
+            //         // Chặn log lỗi, chỉ hiện thông báo trạng thái hàng đợi để tránh làm đỏ màn hình console
+            //         console.log(`[BACKGROUND NOTICE] Trạng thái hàng đợi cho hash [${hash}]:`, errAdd.response?.data?.detail || errAdd.message);
+            //     });
+            // }
+
+            // ĐÓNG GÓI GỘP DỮ LIỆU ĐẦY ĐỦ THÔNG TIN VÀO BẢNG BẢN ĐỒ
             cacheMap[hash] = {
                 torrentName: torrentName,
                 hash: hash,
-                cached: isCached, // Trạng thái đã cache trên hệ thống TorBox hay chưa (true/false)
-                in_account: accountResult !== undefined, // Trạng thái đã add vào tài khoản cá nhân chưa (true/false)
-                account_details: accountResult ? {
-                    id: accountResult.id, // ID Torrent cá nhân để gọi lấy link stream sau này
-                    name: accountResult.name,
-                    progress: accountResult.progress
+                cached: isCached, 
+                in_account: inAccountStatus, 
+                urlDirect: urlDirect, 
+                account_details: activeTorrentId ? {
+                    id: activeTorrentId, 
+                    name: torrentName,
+                    progress: accountResult ? accountResult.progress : 1 
                 } : null
             };
-
-            console.log(`[TORBOX INTEGRATION LOG] - Hash [${hash}] | Cached: ${cacheMap[hash].cached} | In Account: ${cacheMap[hash].in_account}`);
         });
 
-        console.log(`[TORBOX BULK] - Kết quả gộp tích hợp hoàn chỉnh:`, JSON.stringify(cacheMap, null, 2));
+        // 🌟 KÍCH HOẠT CHẠY SONG SONG THỰC TẾ: Đợi toàn bộ các tiến trình lấy link trực tiếp hoàn tất cùng lúc
+        await Promise.all(processPromises);
+
+        console.log(`[TORBOX BULK] - Kết quả gộp tích hợp hoàn chỉnh kèm Direct Link:`, JSON.stringify(cacheMap, null, 2));
         return cacheMap; 
         
     } catch (error) {
@@ -203,8 +309,6 @@ async function checkTorBoxCacheBulk(hashInput, torboxToken) {
         return {};
     }
 }
-
-
 
 /**
  * Hàm lấy link Stream trực tiếp tối ưu bằng Magnet Link đầu vào

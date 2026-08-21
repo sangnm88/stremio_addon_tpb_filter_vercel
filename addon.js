@@ -83,6 +83,7 @@ builder.defineCatalogHandler(async (args) => {
         }
     });
 
+    const userTorBoxToken = userToken || "none";
     console.log(`[CATALOG] showAdultConfig : ${showAdultConfig} userToken: ${userToken}`);
     
     // Nếu người dùng cố tình tìm cách truy cập tab Adult khi cấu hình đang tắt, chặn đứng lập tức
@@ -157,18 +158,51 @@ builder.defineCatalogHandler(async (args) => {
     } catch (err) {
         console.error("[CATALOG SEARCH ERROR] Lỗi trong quá trình quét gộp danh mục:", err.message);
     }
+
+
+    // 🌟 MẤU CHỐT 1: GOM TOÀN BỘ INFOHASH THEO PHIM ĐƯỢC LOAD LẦN ĐẦU THÀNH 1 MẢNG SẠCH
+    // Lọc bỏ các phần tử trùng lặp hoặc mã hash rác lỗi nếu có
+    // const bulkHashList = allTorrents
+    //     .map(t => t.infoHash ? String(t.infoHash).trim().toLowerCase() : null)
+    //     .filter(h => h && h.length > 0);
+
+    // console.log(`[BULK COLLECTOR] Tổng số mã hash gom được từ danh mục: ${bulkHashList.length} hashes.`);
+
+    // // Khởi tạo bảng bản đồ dữ liệu bộ nhớ đệm trống phòng hờ mạng sập
+    // let torboxCacheMap = {};
+
+    // // 🌟 MẤU CHỐT 2: TRUYỀN TẤT CẢ HASH VÀO HÀM checkTorBoxCacheBulk ĐỂ QUÉT ĐÚNG 1 LƯỢT DUY NHẤT
+    // if (decryptToken(userTorBoxToken) !== "none" && bulkHashList.length > 0) {
+    //     try {
+    //         // Gọi duy nhất 1 request tích hợp mạng, bốc trọn gói cả trạng thái cached và urlDirect
+    //         torboxCacheMap = await checkTorBoxCacheBulk(bulkHashList, userTorBoxToken);
+    //     } catch (bulkErr) {
+    //         console.error("[BULK PROCESS ERROR] Quét hàng loạt thất bại:", bulkErr.message);
+    //     }
+    // }
+
     // Đoạn cuối hàm map xuất danh sách Card của defineCatalogHandler:
     // TRONG FILE addon.js -> defineCatalogHandler
     const metas = allTorrents.map(t => {
+        
+        const currentHash = String(t.infoHash).toLowerCase().trim();
+        
+        // Trích xuất thông tin khớp từ bảng bản đồ cache của TorBox trả về
+        //const cacheInfo = torboxCacheMap[currentHash] || { cached: false, urlDirect: "none" };
+        
+        // Thiết lập biểu tượng chấm trạng thái trực quan ngoài giao diện rạp phim
+        //const statusIcon = cacheInfo.cached ? "🟢" : "⚫"; 
+        
         // Biến t.name từ Util.js truyền sang đã là chuỗi chứa: tiêu_đề||dung_lượng||seeders||leechers||indexer||resolution
         const packedData = t.packedData; 
         const cleanTitle = packedData.split("||")[0]; // Cắt lấy tên phim sạch hiển thị ngoài trang Discover
 
         return {
+            //Cập nhật bổ sung thêm [urlDirect] đóng gói vào id - khi play sẽ lấy trục tiếp (nếu có)
             // ĐÓN_GÓI VÀO ID: Lưu chuỗi thông tin gốc đi kèm mã hash
-            id: `tpb:${t.infoHash}||${packedData}`, 
+            id: `tpb:${t.infoHash}||${packedData}}`, 
             type: "movie",
-            name: cleanTitle, 
+            name: `${cleanTitle}`, 
             poster: "https://githubusercontent.com",
             description: `Dung lượng: ${packedData.split("||")[1]} GB | Seeders: ${packedData.split("||")[2]}`
         };
@@ -190,7 +224,7 @@ builder.defineCatalogHandler(async (args) => {
 
     // });
 
-    console.log (`Dữ liệu thô từ metas: ${JSON.stringify(metas, null, 2)}`);
+    //console.log (`Dữ liệu thô từ metas: ${JSON.stringify(metas, null, 2)}`);
     return { metas: metas };
 });
 
@@ -235,7 +269,8 @@ builder.defineStreamHandler(async (args) => {
     let seasonEpisodeSuffix = "";
 
     let emoji = "🎞️";
-
+    let urlDirect = "";
+    let isCached = false;
     // 1. Xử lý luồng dữ liệu độc lập cho Catalog riêng của bạn
     if (args.id && args.id.startsWith("tpb:")) {
         // TRUYỀN NGUYÊN BIẾN args.id để rã gói lấy thông tin dựng cột bên phải
@@ -245,21 +280,29 @@ builder.defineStreamHandler(async (args) => {
             return { streams: [{ name: "🧲 [FALLBACK P2P]", title: "Lỗi giải mã cấu trúc dữ liệu.", infoHash: args.id.replace("tpb:", "").split("||")[0] }] };
         }
 
+        //test strem bằng url
+        // return { streams: [{ 
+        //         name: "Test video", 
+        //         title: "Test vido",
+        //         url : "https://nexus-170.apac.tb-cdn.pw/dld/3cdf55ec-e639-4e07-a9e9-23750d6e32bf?token=2dfd76ec-8e6c-4111-8295-d640cd4ce372&filename=Obsession.2026.1080p.TELESYNC.x264-UNiON.mkv"
+        //     }] 
+        // };
+
         const pureHash = info.hash; // Lấy mã hash sạch đã rã gói
         const userTorBoxToken = userToken || "none";// process.env.CURRENT_TORBOX_TOKEN || "none";
         const currentHost = process.env.HOST_URL || "localhost:7000";
-
+        
 
         console.log(`Token bị mã hoá: ${userTorBoxToken}`)
 
         // Tạo link bẻ khóa truyền kèm tham số magnet link đầy đủ
-        //const directPlayUrl = `http://${currentHost}/play/torbox/${pureHash}/${userTorBoxToken}?magnet=${encodeURIComponent(`magnet:?xt=urn:btih:${pureHash}&dn=${encodeURIComponent(info.name)}`)}`;
+        //const urlDirect = `http://${currentHost}/play/torbox/${pureHash}/${userTorBoxToken}?magnet=${encodeURIComponent(`magnet:?xt=urn:btih:${pureHash}&dn=${encodeURIComponent(info.name)}`)}`;
 
         if (info.resolution === "4K") emoji = "🌟 [4K UHD]";
         if (info.resolution === "1080p") emoji = "🎬 [1080p FHD]";
         if (info.resolution === "720p") emoji = "⚡ [720p HD]";
 
-        let isCachedOnTorBox = false;
+        let isCachedOnTorBox = isCached;
         let dynamicTitle = `🧲 Luồng phát P2P - Kéo torrent bằng mạng ngang hàng mạng nội bộ thiết bị.\n${info.name}\n\n${info.title}`;
         let dynamicName = `${emoji}`;
 
@@ -268,7 +311,10 @@ builder.defineStreamHandler(async (args) => {
             try {
                 // Gọi hàm check bulk đơn lẻ tốc độ cao từ TorBox.js của bạn
                 const cacheMap = await checkTorBoxCacheBulk(pureHash, userTorBoxToken);
-                isCachedOnTorBox = cacheMap[pureHash].cached;
+                //isCachedOnTorBox = cacheMap[pureHash].cached;
+                const cacheInfo = cacheMap[pureHash] || { cached: false, urlDirect: "" };
+                isCachedOnTorBox = cacheInfo.cached
+                urlDirect = decryptToken(cacheInfo.urlDirect);//giải mã
             } catch (err) {
                 console.error("[STREAM HANDLER CACHE CHECK ERROR]", err.message);
                 isCachedOnTorBox = false;
@@ -297,13 +343,34 @@ builder.defineStreamHandler(async (args) => {
             dynamicTitle = `🧲 Luồng phát P2P - Kéo torrent bằng mạng ngang hàng mạng nội bộ thiết bị\n${info.name}\n\n${info.title}`;
 
         }
-        
+
+
+        // 🌟 PHIM ĐÃ CACHED SẴN -> CHỈ TRẢ VỀ URL TRỰC TIẾP (TUYỆT ĐỐI KHÔNG CHỨA INFOHASH)
+        if (urlDirect && urlDirect !== "none") {
+            try {
+                // Giải mã chuỗi Base64 ngược trở lại thành dải link CDN trực tiếp thật (ffl.torbox.app/dl/...)
+                //const finalDirectDownloadLink = Buffer.from(base64Link, 'base64').toString('utf-8').trim();
+                
+                console.log(`[STREAM DISPATCH SUCCESS] Đã mở luồng phát bằng URL CDN trực tiếp: ${urlDirect}`);
+                
+                return {
+                    streams: [{
+                        name: dynamicName,
+                        title: dynamicTitle,
+                        url: urlDirect 
+                    }]
+                };
+            } catch (decodeErr) {
+                console.error("[STREAM DECODE ERROR] Lỗi giải mã chuỗi Base64:", decodeErr.message);
+                // Nếu lỗi giải mã, tự động nhảy xuống tình huống 2 để cứu hộ
+            }
+        }
+
         return {
             streams: [{
                 infoHash : pureHash,
                 name: dynamicName,
                 title: dynamicTitle
-                //url: directPlayUrl
             }]
         };
     }
@@ -339,7 +406,7 @@ builder.defineStreamHandler(async (args) => {
     const resolutionWeights = { "4K": 40, "1080p HDR": 35, "1080p": 30, "720p": 20, "SD": 10 };
 
     if (allStreams.length === 0) {
-        return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp.", url: "" }] };
+        return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp."}] };
     }
 
     // Lấy mã Token của TorBox trích xuất từ URL chạy ngầm
@@ -377,22 +444,27 @@ builder.defineStreamHandler(async (args) => {
 
             console.log(`Đã tìm thấy ${hashList != null ? hashList.length : 0} link stream`);
 
+
+
             allStreams = allStreams.map(stream => {
                 let emoji = "🎞️ No Cache";
+                // Trích xuất thông tin khớp từ bảng bản đồ cache của TorBox trả về
+                const cacheInfo = globalCacheMap[currentHash] || { cached: false, urlDirect: "", in_account : false };
                 const currentHash = String(stream.infoHash).toLowerCase().trim();
-                const isCachedOnTorBox = globalCacheMap[currentHash].cached;
-                
+                const isCachedOnTorBox = cacheInfo.cached;
+                const isInMyAcc = cacheInfo.in_account;
                 
                 const movieName = stream.name;
-
-
                 // MẤU CHỐT: Mã hóa an toàn chuỗi Magnet Link đầy đủ để truyền sang Express
                 const encodedMagnet = stream.magnet ? encodeURIComponent(stream.magnet) : "";
                 //const directPlayUrl = `http://${currentHost}/play/torbox/${currentHash}/${userTorBoxToken}?magnet=${encodedMagnet}`;
                 //console.log(`directPlayUrl: ${directPlayUrl}`)
+                
+                urlDirect = decryptToken(cacheInfo.urlDirect);//Lấy link trực tiếp;
+                //console.log(`directPlayUrl: ${directPlayUrl}`)
                 if(isCachedOnTorBox)
                 {
-                    console.log(`hash: ${stream.infoHash} | isCachedOnTorBox: ${isCachedOnTorBox} | `);
+                    console.log(`hash: ${stream.infoHash} | isCachedOnTorBox: ${isCachedOnTorBox} | isInMyAcc: ${isInMyAcc} | urlDirect: ${urlDirect}`);
                 }
                 
                 if (isCachedOnTorBox) {
@@ -401,10 +473,31 @@ builder.defineStreamHandler(async (args) => {
                     if (stream.resolution === "1080p") emoji = "📦 [TORBOX 1080p\nCached]";
                     if (stream.resolution === "720p") emoji = "📦 [TORBOX 720p\nCached]";
                     
+                    // 🌟 PHIM ĐÃ CACHED SẴN -> CHỈ TRẢ VỀ URL TRỰC TIẾP (TUYỆT ĐỐI KHÔNG CHỨA INFOHASH)
+                    if (urlDirect && urlDirect !== "none") {
+                        try {
+                            // Giải mã chuỗi Base64 ngược trở lại thành dải link CDN trực tiếp thật (ffl.torbox.app/dl/...)
+                            //const finalDirectDownloadLink = Buffer.from(base64Link, 'base64').toString('utf-8').trim();
+                            
+                            //console.log(`[STREAM DISPATCH SUCCESS] Đã mở luồng phát bằng URL CDN trực tiếp: ${finalDirectDownloadLink}`);
+                            
+                            return {
+                                streams: [{
+                                    name: `${emoji}`,
+                                    title: `⚡ ${movieName}\n${stream.title}`,
+                                    resolution: stream.resolution,
+                                    url: urlDirect 
+                                }]
+                            };
+                        } catch (decodeErr) {
+                            console.error("[STREAM DECODE ERROR] Lỗi giải mã chuỗi Base64:", decodeErr.message);
+                            // Nếu lỗi giải mã, tự động nhảy xuống tình huống 2 để cứu hộ
+                        }
+                    }
+
                     return {
                         name: `${emoji}`,
                         title: `⚡ ${movieName}\n${stream.title}`,
-                        //url: directPlayUrl,
                         infoHash: stream.infoHash,
                         resolution: stream.resolution
                     };
@@ -420,7 +513,8 @@ builder.defineStreamHandler(async (args) => {
                         //url: directPlayUrl,
                         //url: encodedMagnet,
                         infoHash: stream.infoHash,
-                        resolution: stream.resolution
+                        resolution: stream.resolution,
+                        //url: urlDirect
                     };
                 }
             }).filter(s => s !== null); // Dọn sạch các stream lỗi rỗng khỏi mảng hiển thị cuối cùng;
