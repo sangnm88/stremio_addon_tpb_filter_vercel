@@ -5,22 +5,29 @@ const { getTorBoxLink, checkTorBoxCacheBulk, decryptToken } = require("./torbox"
 
 // Danh sách các thể loại phim cốt lõi luôn luôn hiển thị (Giữ nguyên của bạn)
 const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+const YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"];
 
 const manifest = {
     id: "community.tpbconfigurableaddon",
-    version: "5.1.0", // Nâng cấp phiên bản tích hợp  QRCode
+    version: "5.5.0", // Nâng cấp phiên bản tích hợp  QRCode
     name: "TPB Custom Filter Addon",
     description: "Searching torrent from TPB",
-    resources: ["stream", "catalog", "meta"], 
+    resources: ["stream", "catalog", "meta", "addon_catalog"], 
     types: ["movie", "series"],
     idPrefixes: ["tt", "tpb:"], 
+    addonCatalogs: [
+        { type: "movie", id: "community", name: "TPB VIP" }
+    ],
     catalogs: [
         {
             id: "tpb_movies_catalog",
             type: "movie",
             name: "TPB Movies",
             // 🌟 SỬA ĐỔI MẤU CHỐT 1: Khai báo mảng tĩnh đầy đủ để ÉP Tivi/Điện thoại hiển thị thanh menu chọn thể loại
-            genres: ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"],
+            
+            //genres: ["All", "Action", "Comedy", "Horror", "Sci-Fi", "Adult 18+"],
+            genres: YEAR_OPTIONS,
+
             // 🌟 MẤU CHỐT SỬA ĐỔI CHÍNH ĐỂ PHÂN TRANG HOẠT ĐỘNG TRÊN STREMIO:
             // Sử dụng cặp thuộc tính extraSupported và extraRequired thay thế hoàn toàn mảng extra cũ [1]
             extraSupported: ["search", "genre", "skip"], // BẮT BUỘC: Thêm "skip" vào đây để kích hoạt cuộn trang vô hạn
@@ -29,7 +36,7 @@ const manifest = {
             extra: [
                 {
                     name: "genre",
-                    options: ["All", "Action", "Comedy", "Horror", "Sci-Fi"]
+                    options: YEAR_OPTIONS//["All", "Action", "Comedy", "Horror", "Sci-Fi"]
                 },
                 { name: "search" },
                 { name: "skip" }
@@ -65,16 +72,27 @@ const builder = new addonBuilder(manifest);
 let showAdultConfig = "false";
 let IS_TORBOX_VIP =  "false";
 let userToken = "none";
+
+builder.defineResourceHandler("addon_catalog", async (args) => {
+    // Log ra Terminal để kiểm tra xem người dùng đang click vào tab nào ở ô số 1
+    console.log(`[DROPDOWN Ô 1] Người dùng chọn phân mục luồng: Type [${args.type}] | ID [${args.id}]`);
+    
+    // Trả về mảng rỗng theo đúng tài liệu đặc tả Stremio API để thỏa mãn điều kiện SDK,
+    // đồng thời nhường luồng xử lý dữ liệu phim lại cho defineCatalogHandler vẽ card phim
+    return { addons: [] };
+});
+
 // ======================================================================
 // 1. LUỒNG XỬ LÝ CATALOG DANH MỤC PHIM (RÃ GÓI TỔNG HỢP TỪ ARGS.ID)
 // ======================================================================
 builder.defineCatalogHandler(async (args) => {
-    console.log(`[CATALOG] Đang gọi danh mục: ${args.id}`);
+    //console.log(`[CATALOG] Đang gọi danh mục: ${args.id}`);
 
     // Rã mảng tổng hợp từ Catalog ID
     // Chuỗi args.id cấu trúc: tpb_movies_catalog||show_adult=true/false||torbox_token=xxx
     const idParts = args.id.split("||");
-
+    const catalogBaseId = idParts[0];
+    console.log(`[CATALOG] Đang gọi danh mục: ${catalogBaseId}`);
 
     idParts.forEach(part => {
         if (part.includes("show_adult=true")) showAdultConfig = "true";
@@ -84,13 +102,19 @@ builder.defineCatalogHandler(async (args) => {
     });
 
     const userTorBoxToken = userToken || "none";
-    console.log(`[CATALOG] showAdultConfig : ${showAdultConfig} userToken: ${userToken}`);
+    console.log(`[CATALOG] showAdultConfig : ${showAdultConfig}`);//userToken: ${userToken}
     
+
     // Nếu người dùng cố tình tìm cách truy cập tab Adult khi cấu hình đang tắt, chặn đứng lập tức
-    if (args.extra?.genre === "Adult 18+" && showAdultConfig !== "true") {
+    if (catalogBaseId === "tpb_adult" && !showAdultConfig) {
         console.log("[SECURITY BLOCK] Chặn truy cập danh mục Adult 18+ theo cấu hình hệ thống.");
-        return { metas: [] }; 
-    }
+        return { metas: [] };
+    };
+
+    // if (args.extra?.genre === "Adult 18+" && showAdultConfig !== "true") {
+    //     console.log("[SECURITY BLOCK] Chặn truy cập danh mục Adult 18+ theo cấu hình hệ thống.");
+    //     return { metas: [] }; 
+    // }
 
     // BÓC TÁCH THAM SỐ PHÂN TRANG: Nếu mới vào thì skip = 0 (Trang 1)
     const skip = (args.extra && args.extra.skip) ? parseInt(args.extra.skip) : 0;
@@ -99,6 +123,7 @@ builder.defineCatalogHandler(async (args) => {
     // skip = 0 -> page = 1; skip = 100 -> page = 2; skip = 200 -> page = 3
     const targetPage = Math.floor(skip / 100) + 1;
     const basePage = Math.floor(skip / 30) + 1; // Tính ra trang bắt đầu của PirateBay
+    const selectedYear = (args.extra && args.extra.genre) ? args.extra.genre : "2026";
 
     let torrents = [];
     let allTorrents = [];
@@ -106,6 +131,14 @@ builder.defineCatalogHandler(async (args) => {
     let searchQuery ="2026";
     let tpbCategory = 200; 
 
+    let genreKeyword = "";
+    if (catalogBaseId === "tpb_action") genreKeyword = "Action";
+    else if (catalogBaseId === "tpb_comedy") genreKeyword = "Comedy";
+    else if (catalogBaseId === "tpb_horror") genreKeyword = "Horror";
+    else if (catalogBaseId === "tpb_scifi") genreKeyword = "Sci-Fi";
+    else if (catalogBaseId === "tpb_adult") genreKeyword = "";
+
+    searchQuery = genreKeyword ? `${genreKeyword} ${selectedYear}` : selectedYear;
     // KỊCH BẢN 1: Người dùng chủ động GÕ TỪ KHÓA vào ô tìm kiếm của Stremio
     if (args.extra && args.extra.search) {
         searchQuery = args.extra.search;
@@ -118,21 +151,21 @@ builder.defineCatalogHandler(async (args) => {
 
     } 
     // KỊCH BẢN 2: Người dùng chỉ DUYỆT THỂ LOẠI trên tab Discover (Không gõ từ khóa)
-    else {
-        const preInstalledGenre = args.config && args.config.default_genre ? args.config.default_genre : "All";
-        const activeGenre = args.extra && args.extra.genre ? args.extra.genre : preInstalledGenre;
+    // else {
+    //     const preInstalledGenre = args.config && args.config.default_genre ? args.config.default_genre : "All";
+    //     const activeGenre = args.extra && args.extra.genre ? args.extra.genre : preInstalledGenre;
 
-        if (activeGenre === "Adult 18+") {
-            tpbCategory = 500; 
-        }
-        console.log(`\n[CATALOG BROWSE] Người dùng đang duyệt danh mục. Thể loại đang chọn: "${activeGenre}"`);
+    //     if (activeGenre === "Adult 18+") {
+    //         tpbCategory = 500; 
+    //     }
+    //     console.log(`\n[CATALOG BROWSE] Người dùng đang duyệt danh mục. Thể loại đang chọn: "${activeGenre}"`);
 
-        // Định dạng từ khóa ảo để tải dữ liệu trang chủ thể loại
-        searchQuery = activeGenre === "All" || activeGenre === "Adult 18+" ? "2026" : activeGenre;
-        console.log(`[CATALOG] Tải tự động cho thể loại: "${searchQuery}" | Danh mục TPB đơn lẻ: ${tpbCategory}`);
+    //     // Định dạng từ khóa ảo để tải dữ liệu trang chủ thể loại
+    //     searchQuery = activeGenre === "All" || activeGenre === "Adult 18+" ? "2026" : activeGenre;
+    //     console.log(`[CATALOG] Tải tự động cho thể loại: "${searchQuery}" | Danh mục TPB đơn lẻ: ${tpbCategory}`);
 
-    }
-
+    // }
+    tpbCategory = (catalogBaseId === "tpb_adult") ? "500" : "200";
     try {
         
         console.log(`[CATALOG PAGINATION] Gộp trang ngầm: Đang cào liên tiếp từ Trang ${basePage} đến Trang ${basePage + 3} của PirateBay...`);
@@ -225,7 +258,11 @@ builder.defineCatalogHandler(async (args) => {
     // });
 
     //console.log (`Dữ liệu thô từ metas: ${JSON.stringify(metas, null, 2)}`);
-    return { metas: metas };
+    return { 
+        metas: metas,
+        cacheMaxAge: 300,
+        staleRevalidate: 600
+    };
 });
 
 // ==========================================
@@ -271,6 +308,11 @@ builder.defineStreamHandler(async (args) => {
     let emoji = "🎞️";
     let urlDirect = "";
     let isCached = false;
+
+    // 🌟 GẮP TOKEN ĐỒNG BỘ QUA IP TỪ TẦNG MIDDLEWARE EXPRESS TRUNG CHUYỂN
+    //const ipMappedToken = args.userActiveToken || args.request?.userActiveToken || "none";
+
+
     // 1. Xử lý luồng dữ liệu độc lập cho Catalog riêng của bạn
     if (args.id && args.id.startsWith("tpb:")) {
         // TRUYỀN NGUYÊN BIẾN args.id để rã gói lấy thông tin dựng cột bên phải
@@ -293,7 +335,8 @@ builder.defineStreamHandler(async (args) => {
         const currentHost = process.env.HOST_URL || "localhost:7000";
         
 
-        console.log(`Token bị mã hoá: ${userTorBoxToken}`)
+
+        //console.log(`Token bị mã hoá: ${userTorBoxToken}`)
 
         // Tạo link bẻ khóa truyền kèm tham số magnet link đầy đủ
         //const urlDirect = `http://${currentHost}/play/torbox/${pureHash}/${userTorBoxToken}?magnet=${encodeURIComponent(`magnet:?xt=urn:btih:${pureHash}&dn=${encodeURIComponent(info.name)}`)}`;
@@ -351,7 +394,7 @@ builder.defineStreamHandler(async (args) => {
                 // Giải mã chuỗi Base64 ngược trở lại thành dải link CDN trực tiếp thật (ffl.torbox.app/dl/...)
                 //const finalDirectDownloadLink = Buffer.from(base64Link, 'base64').toString('utf-8').trim();
                 
-                console.log(`[STREAM DISPATCH SUCCESS] Đã mở luồng phát bằng URL CDN trực tiếp: ${urlDirect}`);
+                console.log(`[STREAM DISPATCH SUCCESS] Đã mở luồng phát bằng URL CDN trực tiếp...`);
                 
                 return {
                     streams: [{
@@ -448,9 +491,11 @@ builder.defineStreamHandler(async (args) => {
 
             allStreams = allStreams.map(stream => {
                 let emoji = "🎞️ No Cache";
-                // Trích xuất thông tin khớp từ bảng bản đồ cache của TorBox trả về
-                const cacheInfo = globalCacheMap[currentHash] || { cached: false, urlDirect: "", in_account : false };
+               
                 const currentHash = String(stream.infoHash).toLowerCase().trim();
+                 // Trích xuất thông tin khớp từ bảng bản đồ cache của TorBox trả về
+                const cacheInfo = globalCacheMap[currentHash] || { cached: false, urlDirect: "", in_account : false };
+
                 const isCachedOnTorBox = cacheInfo.cached;
                 const isInMyAcc = cacheInfo.in_account;
                 
@@ -464,7 +509,7 @@ builder.defineStreamHandler(async (args) => {
                 //console.log(`directPlayUrl: ${directPlayUrl}`)
                 if(isCachedOnTorBox)
                 {
-                    console.log(`hash: ${stream.infoHash} | isCachedOnTorBox: ${isCachedOnTorBox} | isInMyAcc: ${isInMyAcc} | urlDirect: ${urlDirect}`);
+                    console.log(`hash: ${stream.infoHash} | isCachedOnTorBox: ${isCachedOnTorBox} | isInMyAcc: ${isInMyAcc} | urlDirect: ${cacheInfo.urlDirect}`);
                 }
                 
                 if (isCachedOnTorBox) {
@@ -480,14 +525,11 @@ builder.defineStreamHandler(async (args) => {
                             //const finalDirectDownloadLink = Buffer.from(base64Link, 'base64').toString('utf-8').trim();
                             
                             //console.log(`[STREAM DISPATCH SUCCESS] Đã mở luồng phát bằng URL CDN trực tiếp: ${finalDirectDownloadLink}`);
-                            
                             return {
-                                streams: [{
-                                    name: `${emoji}`,
-                                    title: `⚡ ${movieName}\n${stream.title}`,
-                                    resolution: stream.resolution,
-                                    url: urlDirect 
-                                }]
+                                name: `${emoji}`,
+                                title: `⚡ ${movieName}\n${stream.title}`,
+                                resolution: stream.resolution,
+                                url: urlDirect 
                             };
                         } catch (decodeErr) {
                             console.error("[STREAM DECODE ERROR] Lỗi giải mã chuỗi Base64:", decodeErr.message);
@@ -525,6 +567,7 @@ builder.defineStreamHandler(async (args) => {
         console.log(`[STREAM TORBOX VIP] Hoàn tất quét trạng thái bộ nhớ đệm cho danh sách torrent...`);
     }
 
+    //console.log(`[SORT]`, JSON.stringify(allStreams, null, 2));
     // Thuật toán sắp xếp đa tầng: Ưu tiên link 📦 [TORBOX] -> Độ phân giải cao -> Số lượng Seeders
     allStreams.sort((a, b) => {
         const isA_Cached = a.name.includes("📦");
@@ -543,7 +586,11 @@ builder.defineStreamHandler(async (args) => {
         return sB - sA; 
     });
 
-    return { streams: allStreams };
+    return { 
+        streams: allStreams,
+        cacheMaxAge: 300,
+        staleRevalidate: 600
+    };
 });
 
 

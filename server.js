@@ -12,6 +12,10 @@ const { getTorBoxLink } = require("./torbox");
 const app = express();
 const PORT = process.env.PORT || 7000;
 
+// 🌟 THÊM MỚI: Khởi tạo bảng băm lưu trữ bộ nhớ đệm IP map Token trong RAM Server
+// Cấu trúc dạng: { "113.161.x.x": "MÃ_TOKEN_BASE64" }
+const DEVICES_SESSION_STORE = {};
+
 // ======================================================================
 // 1. CẤU HÌNH CƠ SỞ (MIDDLEWARE & CORS)
 // ======================================================================
@@ -62,52 +66,88 @@ app.get(["/", "/configure"], (req, res) => {
 //     return res.json(addonInterface.manifest);
 // });
 
-// ======================================================================
-// CẤU HÌNH PHÂN PHỐI MANIFEST TĨNH KHỚP VỚI CẤU TRÚC V3-CINEMETA STREMIO
-// ======================================================================
+// server.js - Tầng bẫy JSON Manifest tối tân bẻ khóa giao diện 3 ô Dropdown
 app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    // Mảng danh mục phim thường cốt lõi
-    const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
+    const YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"];
+    const STUDIO_OPTIONS = ["Missax"];
 
     const configParam = req.params.config || req.url;
     const decodedParam = decodeURIComponent(configParam);
-    
-    // Sao chép sâu đối tượng manifest gốc sang để xử lý độc lập cho từng phiên làm việc
-    let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
+   
 
-    // Phân luồng ẩn/hiện mục Adult dựa theo cấu hình URL thiết bị
-    if (decodedParam.includes("show_adult=true")) {
-        console.log("[MANIFEST COMPILER] Bật Adult: Đồng bộ nạp thêm mục 18+");
+    // Gắp IP thật của thiết bị để phục vụ bẫy khóa lưu session
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "local";
+    const cleanIp = clientIp.split(',')[0].trim();
+
+    let showAdultVal = "false";
+    let torboxTokenVal = "none";
+
+
+    if (decodedParam.includes("torbox_token=")) {
+        const URLParts = decodedParam.split("|");
+        URLParts.forEach(part => {
+            const [key, value] = part.split("=");
+            if (key && value) {
+                const cleanValue = value.split("/")[0].trim();
+                if (key.includes("show_adult")) showAdultVal = cleanValue.toLowerCase();
+                if (key.includes("torbox_token")) torboxTokenVal = cleanValue;
+            }
+        });
         
-        dynamicManifest.catalogs[0].genres = [...CORE_GENRES, "Adult 18+"];
-        
-        // 🌟 SỬA ĐỔI CHÍNH XÁC THEO CINEMETA: Thay toàn bộ "key" thành "name"
-        dynamicManifest.catalogs[0].extra = [
-            {
-                name: "genre",
-                options: [...CORE_GENRES, "Adult 18+"]
-            },
-            { name: "search" },
-            { name: "skip" }
-        ];
-    } else {
-        console.log("[MANIFEST COMPILER] Tắt Adult: Cô lập danh mục rạp thường.");
-        
-        dynamicManifest.catalogs[0].genres = CORE_GENRES;
-        
-        // Loại bỏ hoàn toàn chữ Adult 18+ khỏi mảng options tĩnh của thiết bị này
-        dynamicManifest.catalogs[0].extra = [
-            {
-                name: "genre",
-                options: CORE_GENRES
-            },
-            { name: "search" },
-            { name: "skip" }
-        ];
+        // 🌟 GHIN NHỚ VÀO RAM: Lưu vĩnh viễn cấu hình của thiết bị IP này khi nạp Addon lần đầu
+        if (cleanIp && torboxTokenVal !== "none") {
+            DEVICES_SESSION_STORE[cleanIp] = { token: torboxTokenVal, showAdult: showAdultVal };
+            console.log(`[SESSION SAVED] IP [${cleanIp}] -> Đã ghim Token: ${torboxTokenVal.substring(0,6)}... | Adult: ${showAdultVal}`);
+        }
     }
+
+    // 🌟 BẺ KHÓA TRỰC TIẾP TẦNG CỔNG INTERNET (BYPASS SDK CHỐNG SẬP NGUỒN):
+    // Ép nhồi chữ "addon_catalog" ra ngoài cổng mạng thô để Stremio Client đọc hiểu
+    let dynamicManifest = JSON.parse(JSON.stringify(addonInterface.manifest));
+    dynamicManifest.resources = ["catalog", "meta", "stream", "addon_catalog"];
+    dynamicManifest.types = ["movie", "series"];
+
+    // Định nghĩa danh sách hiển thị ở ô dropdown số 1 bên trái cùng (Đồng bộ ID "community")
+    dynamicManifest.addonCatalogs = [
+        { type: "movie", id: "tpb_movie_vip", name: "🎥 Kho Phim Lẻ VIP" },
+        { type: "series", id: "tpb_series_vip", name: "📺 Kho Phim Bộ VIP" }
+    ];
+
+    // Cấu hình các hàng phim xuất hiện ở ô số 2
+    const baseCatalogs = [
+        { id: "tpb_all", name: "[TPB] All" },
+        { id: "tpb_action", name: "[TPB] Action" },
+        { id: "tpb_comedy", name: "[TPB] Comedy" },
+        { id: "tpb_horror", name: "[TPB] Horror" },
+        { id: "tpb_scifi", name: "[TPB] Sci-Fi" }
+    ];
+
+    if (decodedParam.includes("show_adult=true")) {
+        baseCatalogs.push({ id: "tpb_adult", name: "🔞 Adult 18+" });
+    }
+
+    // Ép cấu trúc ô số 3 chứa mảng năm phát hành
+    dynamicManifest.catalogs = baseCatalogs.map(cat => {
+        return {
+            type: cat.id === "tpb_all" || cat.id === "tpb_action" || cat.id === "tpb_comedy" || cat.id === "tpb_horror" || cat.id === "tpb_scifi" || cat.id === "tpb_adult" ? "movie" : "series",
+            id: cat.id,
+            name: cat.name,
+            genres: cat.id === "tpb_adult" ? [...STUDIO_OPTIONS, ...YEAR_OPTIONS] : YEAR_OPTIONS,
+            extraSupported: ["search", "genre", "skip"],
+            extra: [
+                {   name: "genre", 
+                    options: cat.id === "tpb_adult" ? [...STUDIO_OPTIONS, ...YEAR_OPTIONS] : YEAR_OPTIONS,
+                    isRequired: false 
+                },
+                { name: "search" },
+                { name: "skip" }
+            ],
+            extraRequired: []
+        };
+    });
 
     return res.json(dynamicManifest);
 });
@@ -183,6 +223,44 @@ app.get("/play/torbox/:hash/:token", async (req, res) => {
 app.use((req, res, next) => {
     const urlPath = req.path;
     
+    // Mẹo bốc trích địa chỉ IP thật nội bộ của thiết bị đang gọi request tới Addon
+    const userRealIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "";
+    const cleanIp = userRealIp.split(',')[0].trim();
+
+    console.log (`My IP: ${cleanIp}`);
+
+    // 1. LUỒNG GHIN NHỚ: Mỗi khi thiết bị gọi bất kỳ lệnh nào từ URL cấu hình của bạn (như lướt Catalog)
+    if (urlPath.includes("torbox_token=")) {
+        try {
+            const decodedPath = decodeURIComponent(urlPath);
+            const URLParts = decodedPath.split("|");
+            
+            let torboxTokenVal = "none";
+            URLParts.forEach(part => {
+                const [key, value] = part.split("=");
+                if (key && value && key.includes("torbox_token")) {
+                    torboxTokenVal = value.split("/")[0].trim();
+                }
+            });
+
+            if (torboxTokenVal !== "none" && cleanIp) {
+                // Đóng dấu vân tay IP: Lưu Token của riêng thiết bị này vào bộ đệm RAM của request hiện tại
+                DEVICES_SESSION_STORE[cleanIp] = torboxTokenVal;
+                // Ép thêm vào biến môi trường chạy ngầm làm dự phòng chống trượt luồng
+                req.userActiveToken = torboxTokenVal;
+            }
+        } catch (e) {
+            console.error("[IP RECORD ERROR]", e.message);
+        }
+    }
+
+    // 2. LUỒNG TRÍCH XUẤT: Nếu thiết bị gọi từ Cinemeta (URL thô /catalog/movie/tt...), 
+    // ta tự động tìm kiếm Token cũ của chính IP này trong bảng băm để đắp vào request
+    if (cleanIp && DEVICES_SESSION_STORE[cleanIp]) {
+        req.userActiveToken = DEVICES_SESSION_STORE[cleanIp];
+    }
+
+
     if (urlPath.includes("/catalog/") && urlPath.includes("torbox_token=")) {
         try {
             const decodedPath = decodeURIComponent(urlPath);
@@ -200,14 +278,24 @@ app.use((req, res, next) => {
                 }
             });
 
-            // Gộp tất cả tham số nhúng thẳng vào cấu trúc Catalog ID hệ thống
-            if (req.url.includes("tpb_movies_catalog.json")) {
-                req.url = req.url.replace(
-                    "tpb_movies_catalog.json", 
-                    `tpb_movies_catalog||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}.json`
-                );
-                console.log(`[MASTER ROUTER] Catalog ID Độc lập: ${req.url}`);
+            const suffix = `||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}.json`;
+            const activeCatalogIds = ["tpb_all", "tpb_action", "tpb_comedy", "tpb_horror", "tpb_scifi", "tpb_adult"];
+            for (const id of activeCatalogIds) {
+                //console.log(`[MASTER ROUTER] Catalog ID Độc lập: ${req.url}`)
+                if (req.url.includes(`${id}.json`)) {
+                    req.url = req.url.replace(`${id}.json`, `${id}${suffix}`);
+                    break;
+                }
             }
+
+            // Gộp tất cả tham số nhúng thẳng vào cấu trúc Catalog ID hệ thống
+            // if (req.url.includes("tpb_movies_catalog.json")) {
+            //     req.url = req.url.replace(
+            //         "tpb_movies_catalog.json", 
+            //         `tpb_movies_catalog||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}.json`
+            //     );
+            //     console.log(`[MASTER ROUTER] Catalog ID Độc lập: ${req.url}`);
+            // }
         } catch (e) {
             console.error("[MASTER ROUTER ERROR]", e.message);
         }
