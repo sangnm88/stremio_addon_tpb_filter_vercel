@@ -22,6 +22,49 @@
             <option value="Sci-Fi">Sci-Fi</option>
         </select>
 
+        <!-- 1. Checkbox tổng điều hướng: Cho phép bật/tắt tính năng cá nhân hóa thể loại -->
+        <div class="config-group" style="margin-top: 15px; text-align: left;">
+            <label style="color: #00ffff; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="enable_customize_genres" style="transform: scale(1.2); cursor: pointer;"> 
+                🛠️ Kích hoạt tùy chỉnh Thể loại nâng cao
+            </label>
+        </div>
+
+        <!-- 2. Khối thẻ DIV chứa bộ chọn thể loại động (Mặc định ẩn hoàn toàn bằng display: none) -->
+        <div id="customize_genres_panel" style="display: none; margin-top: 15px; padding: 15px; border: 1px solid #333; border-radius: 8px; background: #111; text-align: left;">
+            <label style="font-weight: bold; display: block; margin-bottom: 10px; color: #fff; font-size: 14px;">
+                🎭 Tích chọn các Thể loại hiển thị ngoài Tivi:
+            </label>
+            
+            <div class="genres-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px;">
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="Missax" checked disabled> Missax
+                </label>
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="Teamskeet" checked> Teamskeet
+                </label>
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="WowGirls" checked> WowGirls
+                </label>
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="SweetHeart" checked> SweetHeart
+                </label>
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="FC2" checked> FC2
+                </label>
+                <label style="color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="genre-checkbox" value="Uncen" checked> Uncen
+                </label>
+            </div>
+
+            <label style="font-weight: bold; display: block; margin-bottom: 5px; color: #fff; font-size: 13px;">
+                ➕ Gõ thêm thể loại tự chế (Ví dụ: Anime, Drama, Korean...):
+            </label>
+            <input type="text" id="custom_genres" placeholder="Cách nhau bằng dấu phẩy (,)" 
+                   style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: #fff; box-sizing: border-box;">
+        </div>
+
+
         <label>TorBox API Key:</label>
         <div class="password-wrapper">
             <input type="password" id="token" placeholder="Dán mã TorBox API Key của bạn..." oninput="updateQRCode()" />

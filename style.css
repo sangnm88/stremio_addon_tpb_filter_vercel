@@ -113,3 +113,117 @@ label {
     color: #ff9900;
 }
 
+/* ======================================================================
+   CẤU HÌNH ĐỒ HỌA PANEL TÙY CHỈNH THỂ LOẠI NÂNG CAO (DARK MODE)
+   ====================================================================== */
+
+/* 1. Định dạng dòng Checkbox tổng điều hướng */
+.customize-trigger-label {
+    color: #00ffff !important;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(0, 255, 255, 0.03);
+    border: 1px dashed rgba(0, 255, 255, 0.2);
+    transition: all 0.25s ease-in-out;
+}
+
+.customize-trigger-label:hover {
+    background: rgba(0, 255, 255, 0.08);
+    border-color: #00ffff;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.15);
+}
+
+/* 2. Khối hộp Panel chứa danh mục thể loại (Mặc định ẩn và có hiệu ứng trượt) */
+#customize_genres_panel {
+    display: none; /* Quản lý ẩn hiện bằng JS */
+    margin-top: 15px;
+    padding: 20px;
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    background: #141414;
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+    animation: fadeInSlide 0.3s ease-in-out forwards;
+}
+
+/* 3. Khối lưới chia đều 2 cột cho các ô Checkbox thể loại con */
+.genres-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+/* Định dạng nhãn text và hiệu ứng hover của từng ô checkbox thể loại con */
+.genre-item-label {
+    color: #b3b3b3;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #1c1c1c;
+    border: 1px solid #262626;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.genre-item-label:hover {
+    color: #ffffff;
+    background: #262626;
+    border-color: #404040;
+}
+
+/* Thay đổi màu sắc khi ô checkbox được tích chọn */
+.genre-item-label input[type="checkbox"]:checked + span,
+.genre-item-label:has(input[type="checkbox"]:checked) {
+    color: #00ffff;
+    border-color: rgba(0, 255, 255, 0.4);
+    background: rgba(0, 255, 255, 0.02);
+}
+
+/* Ép các ô input checkbox thô to hơn và đổi màu con trỏ */
+.genre-checkbox, #enable_customize_genres {
+    width: 16px;
+    height: 16px;
+    accent-color: #00ffff; /* Đổi màu xanh neon đặc trưng cho nút tích */
+    cursor: pointer;
+}
+
+/* 4. Định dạng ô TextBox gõ chữ tự chế */
+.custom-genres-textbox {
+    width: 100%;
+    padding: 12px 15px;
+    border-radius: 6px;
+    border: 1px solid #2b2b2b;
+    background: #1a1a1a;
+    color: #ffffff;
+    font-size: 14px;
+    box-sizing: border-box;
+    transition: all 0.2s ease;
+}
+
+.custom-genres-textbox:focus {
+    outline: none;
+    border-color: #00ffff;
+    box-shadow: 0 0 8px rgba(0, 255, 255, 0.2);
+    background: #1e1e1e;
+}
+
+/* Hiệu ứng hoạt họa mượt mà khi bảng chọn trượt hiện ra */
+@keyframes fadeInSlide {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

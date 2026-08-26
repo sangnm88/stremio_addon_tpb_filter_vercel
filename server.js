@@ -29,31 +29,36 @@ app.use((req, res, next) => {
 // 🌟 THÊM ĐOẠN NÀY: Mở endpoint cấp tệp tĩnh style.css ra internet công khai
 app.get("/style.css", (req, res) => {
     res.setHeader("Content-Type", "text/css; charset=utf-8");
-    res.sendFile(path.join(__dirname, "style.css"));
+    res.sendFile(path.join(process.cwd(), "style.css"));
 });
 // Mở endpoint cấp tệp tĩnh script.js ra internet công khai
 app.get("/script.js", (req, res) => {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.sendFile(path.join(__dirname, "script.js"));
+    res.sendFile(path.join(process.cwd(), "script.js"));
 });
 
 // Mở endpoint cấp tệp tĩnh qrcode.js ra internet công khai
 app.get("/qrcode.js", (req, res) => {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.sendFile(path.join(__dirname, "qrcode.js"));
+    res.sendFile(path.join(process.cwd(), "qrcode.js"));
 });
 
 // ======================================================================
 // 1. GIAO DIỆN CẤU HÌNH - ĐỌC TỪ FILE CONFIGURE.HTML RIÊNG BIỆT
 // ======================================================================
+// ======================================================================
+// ENDPOINT PHÂN PHỐI TRANG CONFIG VIP (TỐI ƯU BẰNG RES.SENDFILE)
+// ======================================================================
 app.get(["/", "/configure"], (req, res) => {
-    console.log("[SERVER] Đang đọc và xuất file configure.html...");
-    fs.readFile(path.join(__dirname, "configure.html"), "utf8", (err, data) => {
+    console.log("[SERVER] Đang tối ưu phân phối file configure.html trực tiếp ra internet...");
+    
+    // 🌟 SỬA ĐỔI MẤU CHỐT: Sử dụng hàm chính quy của Express
+    // Tự động đọc file và stream trực tiếp nhị phân, tự bọc Content-Type UTF-8 sạch sẽ
+    return res.sendFile(path.join(process.cwd(), "configure.html"), (err) => {
         if (err) {
+            console.error("[SERVER ERROR] Lỗi phân phối file trang cấu hình:", err.message);
             return res.status(500).send("Không thể tải trang cấu hình hệ thống.");
         }
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.send(data);
     });
 });
 
@@ -72,7 +77,7 @@ app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
 
     const YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"];
-    const STUDIO_OPTIONS = ["Missax"];
+    let STUDIO_OPTIONS = [];//["Missax", "Teamskeet", "WowGirls", "SweetHeart", "FC2", "Uncen"];
 
     const configParam = req.params.config || req.url;
     const decodedParam = decodeURIComponent(configParam);
@@ -84,8 +89,8 @@ app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
 
     let showAdultVal = "false";
     let torboxTokenVal = "none";
-
-
+    //let finalUserOptions = [];
+    let UserOptions = [];
     if (decodedParam.includes("torbox_token=")) {
         const URLParts = decodedParam.split("|");
         URLParts.forEach(part => {
@@ -94,12 +99,22 @@ app.get(["/manifest.json", "/:config/manifest.json"], (req, res) => {
                 const cleanValue = value.split("/")[0].trim();
                 if (key.includes("show_adult")) showAdultVal = cleanValue.toLowerCase();
                 if (key.includes("torbox_token")) torboxTokenVal = cleanValue;
+
+
+                if (key.includes("user_genres")) {
+                    console.log(`user_genres: ${cleanValue}`);
+                    UserOptions = cleanValue.split(",");
+                    //STUDIO_OPTIONS = UserOptions;
+                    UserOptions.forEach(name => {
+                        STUDIO_OPTIONS.push(name);  
+                    });
+                }
             }
         });
         
         // 🌟 GHIN NHỚ VÀO RAM: Lưu vĩnh viễn cấu hình của thiết bị IP này khi nạp Addon lần đầu
         if (cleanIp && torboxTokenVal !== "none") {
-            DEVICES_SESSION_STORE[cleanIp] = { token: torboxTokenVal, showAdult: showAdultVal };
+            DEVICES_SESSION_STORE[cleanIp] = { token: torboxTokenVal, showAdult: showAdultVal};
             console.log(`[SESSION SAVED] IP [${cleanIp}] -> Đã ghim Token: ${torboxTokenVal.substring(0,6)}... | Adult: ${showAdultVal}`);
         }
     }

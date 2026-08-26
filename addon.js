@@ -3,6 +3,15 @@ const axios = require("axios");
 const { scrapeTPB, getProwlarrMetaByHash, getSmartMeta } = require("./Util");
 const { getTorBoxLink, checkTorBoxCacheBulk, decryptToken } = require("./torbox");
 
+
+// ======================================================================
+// 🌟 KHAI BÁO BỘ LƯU TRỮ ĐỆM CATALOG RAM TOÀN CỤC (DÁN VÀO ĐÂY)
+// ======================================================================
+// Đặt biến ở ngoài hàm để Node.js ghim cứng dữ liệu vào RAM Docker Container liên tục 24/7
+const CATALOG_CACHE_STORE = {};
+const CACHE_TIMEOUT = 3 * 60 * 1000; // Định mức thời gian sống: 3 phút (180000 ms)
+
+
 // Danh sách các thể loại phim cốt lõi luôn luôn hiển thị (Giữ nguyên của bạn)
 const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
 const YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"];
@@ -150,6 +159,23 @@ builder.defineCatalogHandler(async (args) => {
         console.log(`Test showAdultConfig - tpbCategory: ${showAdultConfig}`);
 
     } 
+
+    // 🌟 MẤU CHỐT BẺ KHÓA CHỐT RELOAD: Tạo một Unique Key định danh riêng cho request hiện tại
+    const cacheKey = `${userToken.substring(0, 6)}_${catalogBaseId}_${searchQuery}_${skip}`;
+    const now = Date.now();
+
+    // 🔴 BƯỚC ĐỌC CACHE: Nếu bộ nhớ đệm RAM đang có sẵn danh sách phim này và chưa quá hạn 3 phút
+    if (CATALOG_CACHE_STORE[cacheKey] && (now - CATALOG_CACHE_STORE[cacheKey].timestamp < CACHE_TIMEOUT)) {
+        console.log(`[CATALOG RAM HIT] Đã bốc list phim lập tức từ RAM trong 0ms cho key: ${cacheKey}`);
+        
+        // Trả kết quả cũ về ngay lập tức cho Tivi vẽ lại màn hình mà không cần cào mạng lại
+        return { 
+            metas: CATALOG_CACHE_STORE[cacheKey].data,
+            cacheMaxAge: 300,
+            staleRevalidate: 600
+        };
+    }
+
     // KỊCH BẢN 2: Người dùng chỉ DUYỆT THỂ LOẠI trên tab Discover (Không gõ từ khóa)
     // else {
     //     const preInstalledGenre = args.config && args.config.default_genre ? args.config.default_genre : "All";
@@ -216,7 +242,7 @@ builder.defineCatalogHandler(async (args) => {
 
     // Đoạn cuối hàm map xuất danh sách Card của defineCatalogHandler:
     // TRONG FILE addon.js -> defineCatalogHandler
-    const metas = allTorrents.map(t => {
+    const metas = allTorrents.map(async (t)  => {
         
         const currentHash = String(t.infoHash).toLowerCase().trim();
         
@@ -230,16 +256,62 @@ builder.defineCatalogHandler(async (args) => {
         const packedData = t.packedData; 
         const cleanTitle = packedData.split("||")[0]; // Cắt lấy tên phim sạch hiển thị ngoài trang Discover
 
+        const argsID = `tpb:${t.infoHash}||${packedData}`;
+        let poster = "https://githubusercontent.com";
+        let background = "";
+        let logo = "";
+        let releaseInfo = "";
+        let runtime = "";
+        let imdbRating = "";
+        let genres = [];
+        let director = [];
+
+        try {
+            // 🌟 SỬA LỖI CHÍNH: Ép từ khóa "await" đứng trước để bẻ khóa lấy dữ liệu thật ra khỏi Promise
+            const info = await getSmartMeta(args.type, argsID); 
+            
+            if (info) {
+                poster = info.poster || poster;
+                background = info.background || "";
+                logo = info.logo || "";
+                releaseInfo = info.releaseInfo ? String(info.releaseInfo) : "";
+                runtime = info.runtime || "";
+                imdbRating = info.imdbRating ? String(info.imdbRating) : "";
+                genres = Array.isArray(info.genres) ? info.genres : [];
+                director = Array.isArray(info.director) ? info.director : [];
+            }
+        } catch (metaErr) {
+            console.warn(`[META FETCH WARNING] Thất bại gắp ảnh cho phim [${cleanTitle}]:`, metaErr.message);
+        }
+
         return {
             //Cập nhật bổ sung thêm [urlDirect] đóng gói vào id - khi play sẽ lấy trục tiếp (nếu có)
             // ĐÓN_GÓI VÀO ID: Lưu chuỗi thông tin gốc đi kèm mã hash
-            id: `tpb:${t.infoHash}||${packedData}}`, 
-            type: "movie",
+            id: argsID,//`tpb:${t.infoHash}||${packedData}`, 
+            type: args.type,
             name: `${cleanTitle}`, 
-            poster: "https://githubusercontent.com",
+
+            releaseInfo: releaseInfo,
+            runtime: runtime,
+            imdbRating: imdbRating,
+            genres: genres,
+            director: director,
+            poster: poster,
+            background: background,
+            logo: logo,
             description: `Dung lượng: ${packedData.split("||")[1]} GB | Seeders: ${packedData.split("||")[2]}`
         };
     });
+    // Ép JavaScript đợi toàn bộ mảng Promise gắp xong ảnh song song (Giữ nguyên)
+    const finalMetas = (await Promise.all(metas)).filter(m => m !== null);
+
+    //const now = Date.now();
+    // 🌟 🟢 BƯỚC GHI CACHE: Lưu trọn gói mảng metas sạch vừa xử lý xong vào RAM kèm mốc thời gian hiện tại
+    CATALOG_CACHE_STORE[cacheKey] = {
+        timestamp: now,
+        data: finalMetas
+    };
+
 
     // Đóng gói mảng dữ liệu torrent thô thành định dạng Card hiển thị trong ứng dụng Stremio
     // const metas = torrents.map(t => {
@@ -259,44 +331,86 @@ builder.defineCatalogHandler(async (args) => {
 
     //console.log (`Dữ liệu thô từ metas: ${JSON.stringify(metas, null, 2)}`);
     return { 
-        metas: metas,
+        metas: finalMetas,
         cacheMaxAge: 300,
         staleRevalidate: 600
     };
 });
 
-// ==========================================
-// SỬA MẤU CHỐT: XỬ LÝ META HANDLER CHO NGUỒN ID "tpb:"
-// ==========================================
+// ======================================================================
+// ĐỊNH NGHĨA META HANDLER: TRÍCH XUẤT SIÊU TỐC TỪ BỘ ĐỆM RAM CATALOG CACHE
+// ======================================================================
 builder.defineMetaHandler(async (args) => {
-    if (args.id && args.id.startsWith("tpb:")) {
-        // TRUYỀN NGUYÊN BIẾN args.id: Hàm getSmartMeta sẽ tự bóc tách mã hash và rã gói dữ liệu
-        const info = await getSmartMeta(args.type, args.id); 
+    if (args.id.startsWith("tpb:")) {
+        console.log(`[META DETAIL REQUEST] Thiết bị xem chi tiết phim ID: ${args.id}`);
 
-        if (info) {
+        // 🌟Duyệt nhanh trong kho đệm RAM CATALOG_CACHE_STORE toàn cục
+        // Tìm xem bộ phim có ID này nằm trong danh mục nào đã cào trước đó không
+        let cachedMetaObj = null;
+        
+        Object.keys(CATALOG_CACHE_STORE).forEach(key => {
+            const listPhimInCache = CATALOG_CACHE_STORE[key]?.data || [];
+            const foundPhim = listPhimInCache.find(m => m.id === args.id);
+            if (foundPhim) {
+                cachedMetaObj = foundPhim;
+            }
+        });
+
+        // NẾU TÌM THẤY TRONG RAM: Trả ngay kết quả đồ họa đầy đủ trong 0ms không gọi thêm API mạng!
+        if (cachedMetaObj) {
+            console.log(`[META CACHE HIT] Bốc trọn gói đồ họa Poster & Background từ RAM Cache!`);
             return {
                 meta: {
-                    infoHash: info.hash,
-                    id: args.id, // Giữ nguyên ID đóng gói để Stremio chuyển tiếp sang bước Stream
-                    type: "movie",
-                    name: info.name,
-                    releaseInfo: String(info.year),
-                    runtime: "120 min",
-                    imdbRating: String(info.imdbRating),
-                    genres: info.genres,
-                    director: info.director,
-                    cast: info.cast,
-                    poster: info.poster,
-                    background: info.background,
-                    description: info.description
+                    id: cachedMetaObj.id,
+                    type: args.type,
+                    name: cachedMetaObj.name,
+                    poster: cachedMetaObj.poster,       // Ảnh dọc nét căng ngoài chi tiết
+                    background: cachedMetaObj.background, // Ảnh nền ngang bừng sáng góc TV
+                    logo: cachedMetaObj.logo,
+                    description: cachedMetaObj.description,
+                    releaseInfo: cachedMetaObj.releaseInfo,
+                    runtime: cachedMetaObj.runtime,
+                    imdbRating: cachedMetaObj.imdbRating,
+                    genres: cachedMetaObj.genres,
+                    director: cachedMetaObj.director
                 }
             };
         }
+
+        // 🌟(FALLBACK): Nếu lỡ bộ đệm RAM bị hết hạn (quá 3 phút) hoặc không tìm thấy,
+        // Chúng ta mới bắt buộc phải gọi lại getSmartMeta để bốc thông tin cứu hộ luồng chạy
+        try {
+            console.log(`[META FALLBACK NETWORK] RAM trống. Gọi lại getSmartMeta cứu hộ mạng...`);
+            const info = await getSmartMeta(args.type, args.id);
+            if (info) {
+                const idParts = args.id.replace("tpb:", "").split("||");
+                const cleanTitle = idParts[1]?.split("||")[0] || "Unknown Movie";
+                const packedData = idParts[1] || "";
+
+                return {
+                    meta: {
+                        id: args.id,
+                        type: args.type,
+                        name: cleanTitle,
+                        poster: info.poster || "https://githubusercontent.com",
+                        background: info.background || "",
+                        logo: info.logo || "",
+                        description: info.description || `Dung lượng: ${packedData.split("||")[1]} GB`,
+                        releaseInfo: info.releaseInfo ? String(info.releaseInfo) : "",
+                        runtime: info.runtime || "",
+                        imdbRating: info.imdbRating ? String(info.imdbRating) : "",
+                        genres: info.genres || [],
+                        director: info.director || []
+                    }
+                };
+            }
+        } catch (e) {
+            console.error("[META HANDLER CRITICAL ERROR]", e.message);
+        }
     }
-    return { meta: null };
+
+    return { meta: {} };
 });
-
-
 // ==========================================
 // XỬ LÝ STREAM HANDLER
 // ==========================================
@@ -314,9 +428,10 @@ builder.defineStreamHandler(async (args) => {
 
 
     // 1. Xử lý luồng dữ liệu độc lập cho Catalog riêng của bạn
-    if (args.id && args.id.startsWith("tpb:")) {
+    if (args.id && args.id.startsWith("tpb:"))
+    {
         // TRUYỀN NGUYÊN BIẾN args.id để rã gói lấy thông tin dựng cột bên phải
-        const info = await getSmartMeta(args.type, args.id);
+        const info = await getSmartMeta("none", args.id);
         
         if (!info) {
             return { streams: [{ name: "🧲 [FALLBACK P2P]", title: "Lỗi giải mã cấu trúc dữ liệu.", infoHash: args.id.replace("tpb:", "").split("||")[0] }] };
@@ -425,31 +540,32 @@ builder.defineStreamHandler(async (args) => {
         const season = String(parts[1]).padStart(2, '0');
         const episode = String(parts[2]).padStart(2, '0');
         seasonEpisodeSuffix = ` S${season}E${episode}`;
-    }
+    
 
-    try {
-        const metaUrl = `https://cinemeta-live.strem.io/meta/${args.type}/${imdbId}.json`;
-        const metaResponse = await axios.get(metaUrl);
-        if (metaResponse.data && metaResponse.data.meta) {
-            const movieTitle = metaResponse.data.meta.name + seasonEpisodeSuffix;
+        try {
+            const metaUrl = `https://cinemeta-live.strem.io/meta/${args.type}/${imdbId}.json`;
+            const metaResponse = await axios.get(metaUrl);
+            if (metaResponse.data && metaResponse.data.meta) {
+                const movieTitle = metaResponse.data.meta.name + seasonEpisodeSuffix;
 
-            allStreams = await scrapeTPB(movieTitle, 200,1);
+                allStreams = await scrapeTPB(movieTitle, 200,1);
 
-            // Gọi bộ cào dữ liệu từ Prowlarr/Axios đã tối ưu ở các bước trước
-            // const [videoStreams, adultStreams] = await Promise.all([
-            //     scrapeTPB(movieTitle, 200,1),
-            //     //scrapeTPB(movieTitle, 500,1)
-            // ]);
-            // allStreams = [...videoStreams, ...adultStreams];
+                // Gọi bộ cào dữ liệu từ Prowlarr/Axios đã tối ưu ở các bước trước
+                // const [videoStreams, adultStreams] = await Promise.all([
+                //     scrapeTPB(movieTitle, 200,1),
+                //     //scrapeTPB(movieTitle, 500,1)
+                // ]);
+                // allStreams = [...videoStreams, ...adultStreams];
+            }
+        } catch (e) {
+            console.error("[STREAM ERROR]", e.message);
         }
-    } catch (e) {
-        console.error("[STREAM ERROR]", e.message);
-    }
 
-    const resolutionWeights = { "4K": 40, "1080p HDR": 35, "1080p": 30, "720p": 20, "SD": 10 };
+        const resolutionWeights = { "4K": 40, "1080p HDR": 35, "1080p": 30, "720p": 20, "SD": 10 };
 
-    if (allStreams.length === 0) {
-        return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp."}] };
+        if (allStreams.length === 0) {
+            return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp."}] };
+        }
     }
 
     // Lấy mã Token của TorBox trích xuất từ URL chạy ngầm
@@ -472,7 +588,7 @@ builder.defineStreamHandler(async (args) => {
                 name: `${emoji}\n${stream.name}`,
                 title: `🧲 Luồng phát P2P - Kéo torrent bằng mạng ngang hàng mạng nội bộ thiết bị.\n${stream.name}\n\n${stream.title}`,
                 infoHash: String(stream.infoHash).toLowerCase().trim(), // Trả về infoHash gốc để Stremio tự phát
-                resolution: stream.resolution
+                resolution: stream.resolution || "1080p"
             };
         });
     } 

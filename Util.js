@@ -362,8 +362,7 @@ async function getSmartMeta(type, argsId) {
     const idParts = argsId.replace("tpb:", "").split("||");
     const pureHash = idParts[0].toLowerCase().trim(); // Mã hash luôn ở vị trí đầu tiên
 
-    // Endpoint chuẩn tra cứu thông tin phim của Cinemeta Stremio bằng IMDb ID
-    const cinemetaUrl = `https://cinemeta-live.strem.io/meta/${type}/${pureHash}.json`;
+    
 
     // Khởi tạo khung dữ liệu rã gói dự phòng (Fallback Data) từ các vị trí tiếp theo trong chuỗi ID
     let title = idParts[1] || "Nguồn Torrent PirateBay";
@@ -372,35 +371,46 @@ async function getSmartMeta(type, argsId) {
     let leechers = idParts[4] || "0";
     let indexer = idParts[5] || "TPB";
     let resolution = idParts[6] || "1080p";
-    let imdbIdFromProwlarr = idParts[7] || "none"; // Bóc mã IMDb ID được đóng gói
+    let imdbIdFromProwlarr = idParts[7] || ""; // Bóc mã IMDb ID được đóng gói
     //let cached = idParts[8] || false; // true/false
     //let urlDirect = idParts[9] || "none";
+    let logo = "";
+    // Endpoint chuẩn tra cứu thông tin phim của Cinemeta Stremio bằng IMDb ID
+    const cinemetaUrl = `https://cinemeta-live.strem.io/meta/${type}/${imdbIdFromProwlarr}.json`;
+    console.log(`cinemetaUrl: ${cinemetaUrl}`);
     try {
 
+        // Thêm điều kiện type != "none". TH lấy thông tin cho Stream chỉ cần rả từ argsId là đủ
         // 🚀 ƯU TIÊN 1: Nếu Prowlarr cấp mã IMDb ID hợp lệ, gọi thẳng Cinemeta tra cứu thông tin chuẩn rạp
-        // if (imdbIdFromProwlarr && imdbIdFromProwlarr !== "none" && imdbIdFromProwlarr.startsWith("tt")) {
-        //     console.log(`[CINEMETA LOOKUP VIA IMDB] Đang gọi Cinemeta API cho phim có mã ID: ${imdbIdFromProwlarr}`);        
-        //     const metaRes = await axios.get(cinemetaUrl, { timeout: 3000 }).catch(() => null);
-        //     const item = metaRes?.data?.meta;
+        if (imdbIdFromProwlarr && imdbIdFromProwlarr !== "none" && imdbIdFromProwlarr.startsWith("tt") && type != "none") {
+            console.log(`[CINEMETA LOOKUP VIA IMDB] Đang gọi Cinemeta API cho phim có mã ID: ${imdbIdFromProwlarr}`);        
+            const metaRes = await axios.get(cinemetaUrl, { timeout: 3000 }).catch(() => null);
+            const item = metaRes?.data?.meta;
 
-        //     if (item) {
-        //         console.log(`[SMART META SUCCESS] Đã lấy thành công data chuẩn rạp từ Cinemeta cho: ${item.name}`);
-        //         return {
-        //             hash: pureHash,
-        //             name: item.name,
-        //             year: item.year || "2026",
-        //             imdbRating: item.imdbRating || "7.5",
-        //             genres: item.genres || ["Action", "Thriller"],
-        //             director: item.director || ["Unknown"],
-        //             cast: item.cast || ["Unknown"],
-        //             poster: item.poster,
-        //             background: item.background,
-        //             resolution: resolution; //Lấy mặc định
-        //             // Kết hợp mô tả chuẩn rạp với thông tin tệp tin thực tế của bạn cho chuyên nghiệp
-        //             description: `${item.description || ""}\n\n⚙️ THÔNG TIN FILE TORRENT:\n🔌 Nguồn: ${indexer} | 📦 Size: ${size} GB\n👤 S: ${seeders} | 👥 L: ${leechers}`
-        //         };
-        //     }
-        // }
+            if (item) {
+                console.log(`[SMART META SUCCESS] Đã lấy thành công data chuẩn rạp từ Cinemeta cho: ${item.name}`);
+                return {
+                    hash: pureHash,
+                    name: item.name,
+                    runtime: item.runtime,
+                    year: item.year || "2026",
+                    imdbRating: item.imdbRating || "7.5",
+                    genres: item.genres || ["Action", "Thriller"],
+                    director: item.director || ["Unknown"],
+                    cast: item.cast || ["Unknown"],
+                    logo: item.logo,
+                    poster: item.poster,
+                    background: item.background,
+                    resolution: resolution, //Lấy mặc định
+                    trailers: item.trailers,
+                    language: item.language,
+                    country: item.country,
+                    releaseInfo: item.releaseInfo,
+                    // Kết hợp mô tả chuẩn rạp với thông tin tệp tin thực tế của bạn cho chuyên nghiệp
+                    description: `${item.description || ""}\n\n⚙️ THÔNG TIN FILE TORRENT:\n🔌 Nguồn: ${indexer} | 📦 Size: ${size} GB\n👤 S: ${seeders} | 👥 L: ${leechers}`
+                };
+            }
+        }
 
         // 🛟 ƯU TIÊN 2: Nếu IMDb không có hoặc Cinemeta lỗi mạng, tự động rã gói dùng data gốc Prowlarr
         console.log(`[SMART META FALLBACK] Không tìm thấy dữ liệu IMDb từ Cinemeta. Sử dụng dòng chữ rã gói...`);
@@ -416,6 +426,7 @@ async function getSmartMeta(type, argsId) {
             imdbRating: "7.5",
             genres: [resolution, "Torrent", indexer],
             director: "Unknown",
+            logo: logo,
             cast: [`Seeders: ${seeders}`, `Leechers: ${leechers}`],
             poster: "https://githubusercontent.com",
             background: "https://unsplash.com",
@@ -634,11 +645,11 @@ function VerifyPackageData(rawData) {
             
             torrents = verifiedData;
 
-            console.log(`[CELL PARSER SUCCESS] Trích xuất thành công ${torrents.length} dòng phim dựa trên thuật toán sơ đồ 8 cột.`);
+            //console.log(`[CELL PARSER SUCCESS] Trích xuất thành công ${torrents.length} dòng phim dựa trên thuật toán sơ đồ 8 cột.`);
             return torrents;
 
     } catch (parseErr) {
-        console.error("[PARSE COLUMNS ERROR] Thất bại xử lý mảng ô dữ liệu td:", parseErr.message);
+        console.error("[VERIFY DATA ERROR] Thất bại xử lý mảng ô dữ liệu td:", parseErr.message);
         return [];
     }
 }

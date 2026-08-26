@@ -54,17 +54,17 @@ function toggleTokenVisibility() {
 }
 
 // Hàm đóng gói dữ liệu chuỗi cấu hình bảo mật
-function generateConfigUrl(protocolPrefix) {
-    const genre = document.getElementById("genre").value;
-    const token = document.getElementById("token").value || "none";
-    const showAdult = document.getElementById("adult_content").checked ? "true" : "false";
-    const currentHost = window.location.host;
+// function generateConfigUrl(protocolPrefix) {
+//     const genre = document.getElementById("genre").value;
+//     const token = document.getElementById("token").value || "none";
+//     const showAdult = document.getElementById("adult_content").checked ? "true" : "false";
+//     const currentHost = window.location.host;
     
-    const encryptedToken = btoa(token).replace(/=/g, ""); 
-    const configPath = `default_genre=${genre}|torbox_token=${encryptedToken}|show_adult=${showAdult}`;
+//     const encryptedToken = btoa(token).replace(/=/g, ""); 
+//     const configPath = `default_genre=${genre}|torbox_token=${encryptedToken}|show_adult=${showAdult}`;
     
-    return `${protocolPrefix}${currentHost}/${configPath}/manifest.json`;
-}
+//     return `${protocolPrefix}${currentHost}/${configPath}/manifest.json`;
+// }
 
 // 🌟 TỰ ĐỘNG: Cập nhật hình dạng mã QR theo giao thức thực tế của trình duyệt
 function updateQRCode() {
@@ -75,6 +75,87 @@ function updateQRCode() {
         qrcodeInstance.makeCode(newUrl);
     }
 }
+
+// ======================================================================
+// 1. CHỈNH SỬA HÀM TẠO URL CÀI ĐẶT TRONG FILE SCRIPT.JS
+// ======================================================================
+function generateConfigUrl(protocolPrefix) {
+    const genre = document.getElementById("genre").value;
+    const token = document.getElementById("token").value || "none";
+    const showAdult = document.getElementById("adult_content").checked ? "true" : "false";
+    const currentHost = window.location.host;
+    const encryptedToken = btoa(token).replace(/=/g, ""); 
+    
+    // Kiểm tra xem người dùng có tích chọn muốn tùy biến thể loại nâng cao hay không
+    const isCustomizeEnabled = document.getElementById("enable_customize_genres").checked;
+    
+    let baseConfigUrl = `${protocolPrefix}${currentHost}/default_genre=${genre}|torbox_token=${encryptedToken}|show_adult=${showAdult}`;
+
+    // 🌟 THỜI ĐIỂM QUYẾT ĐỊNH: Chỉ chèn thêm tham số user_genres vào URL nếu ô tùy biến ĐƯỢC CHECK
+    if (isCustomizeEnabled) {
+        const selectedGenres = [];
+        
+        // Quét lấy các ô checkbox thể loại được chọn
+        document.querySelectorAll(".genre-checkbox:checked").forEach(cb => {
+            if (cb.value) selectedGenres.push(cb.value.trim());
+        });
+        
+        // Quét lấy thêm chữ ở ô TextBox gõ tay
+        const customGenresInput = document.getElementById("custom_genres")?.value || "";
+        if (customGenresInput.trim()) {
+            customGenresInput.split(",").forEach(g => {
+                const cleanGenre = g.trim();
+                if (cleanGenre && !selectedGenres.includes(cleanGenre)) {
+                    selectedGenres.push(cleanGenre);
+                }
+            });
+        }
+
+        if (selectedGenres.length === 0) {
+            selectedGenres.push("All", "Action", "Comedy", "Horror", "Sci-Fi");
+        }
+
+        const genreString = selectedGenres.join(",");
+        // Nối thêm đuôi dữ liệu động vào sau URL phẳng gốc
+        baseConfigUrl += `|user_genres=${encodeURIComponent(genreString)}`;
+    }
+
+    return baseConfigUrl+="/manifest.json";
+}
+
+// ======================================================================
+// 2. CHÈN ĐOẠN LẮNG NGHE SỰ KIỆN ẨN HIỆN PANEL VÀO KHỐI DOMContentLoaded
+// ======================================================================
+document.addEventListener("DOMContentLoaded", () => {
+    const customizeCheckbox = document.getElementById("enable_customize_genres");
+    const customizePanel = document.getElementById("customize_genres_panel");
+
+    // 🌟 BẪY SỰ KIỆN ẨN/HIỆN PANEL THÔNG MINH
+    if (customizeCheckbox && customizePanel) {
+        customizeCheckbox.addEventListener("change", () => {
+            if (customizeCheckbox.checked) {
+                // Nếu check: Hiện khung chọn thể loại ra màn hình web mượt mà
+                customizePanel.style.display = "block";
+            } else {
+                // Nếu bỏ check: Ẩn hoàn toàn khung chọn đi cho gọn giao diện như cũ
+                customizePanel.style.display = "none";
+            }
+            // 🌟 Ép vẽ lại ma trận QR Code ngay lập tức để chèn hoặc gỡ bỏ trường user_genres khỏi URL
+            updateQRCode();
+        });
+    }
+
+    // Lắng nghe các sự kiện thay đổi dữ liệu bên trong panel (Giữ nguyên luồng cũ của bạn)
+    document.querySelectorAll(".genre-checkbox").forEach(checkbox => {
+        checkbox.addEventListener("change", updateQRCode);
+    });
+    document.getElementById("custom_genres")?.addEventListener("input", updateQRCode);
+    //document.getElementById("token")?.addEventListener("input", updateQRCode);
+    //document.getElementById("adult_content")?.addEventListener("change", updateQRCode);
+
+    // Chạy kích hoạt kết quả đồ họa ban đầu
+    updateQRCode();
+});
 
 
 // Hàm xử lý nút cài đặt trực tiếp vào ứng dụng Stremio Client
