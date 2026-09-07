@@ -31,20 +31,24 @@ app.use((req, res, next) => {
 });
 
 // 🌟 THÊM ĐOẠN NÀY: Mở endpoint cấp tệp tĩnh style.css ra internet công khai
+// (Dùng __dirname thay vì process.cwd(): trên Vercel, @vercel/node bundle function bằng
+// file-tracing - chỉ gồm các file được truy cập bằng đường dẫn tĩnh tính từ __dirname.
+// process.cwd() chỉ được xác định lúc runtime nên file BỊ LOẠI khỏi bundle
+// -> /configure trả 500 sau deploy dù chạy local hoàn hảo)
 app.get("/style.css", (req, res) => {
     res.setHeader("Content-Type", "text/css; charset=utf-8");
-    res.sendFile(path.join(process.cwd(), "style.css"));
+    res.sendFile(path.join(__dirname, "style.css"));
 });
 // Mở endpoint cấp tệp tĩnh script.js ra internet công khai
 app.get("/script.js", (req, res) => {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.sendFile(path.join(process.cwd(), "script.js"));
+    res.sendFile(path.join(__dirname, "script.js"));
 });
 
 // Mở endpoint cấp tệp tĩnh qrcode.js ra internet công khai
 app.get("/qrcode.js", (req, res) => {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.sendFile(path.join(process.cwd(), "qrcode.js"));
+    res.sendFile(path.join(__dirname, "qrcode.js"));
 });
 
 // ======================================================================
@@ -58,7 +62,8 @@ app.get(["/", "/configure"], (req, res) => {
     
     // 🌟 SỬA ĐỔI MẤU CHỐT: Sử dụng hàm chính quy của Express
     // Tự động đọc file và stream trực tiếp nhị phân, tự bọc Content-Type UTF-8 sạch sẽ
-    return res.sendFile(path.join(process.cwd(), "configure.html"), (err) => {
+    // (__dirname thay cho process.cwd() để Vercel bundle kèm file - xem giải thích trên)
+    return res.sendFile(path.join(__dirname, "configure.html"), (err) => {
         if (err) {
             console.error("[SERVER ERROR] Lỗi phân phối file trang cấu hình:", err.message);
             return res.status(500).send("Không thể tải trang cấu hình hệ thống.");
