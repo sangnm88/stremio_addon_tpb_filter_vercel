@@ -2,6 +2,14 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 
 // ==========================================
+// BỘ ĐỆM RAM NGẮN HẠN CHO TRA CỨU CINEMETA
+// ==========================================
+// Một trang catalog thường chứa nhiều torrent cùng chung một phim (cùng IMDb ID),
+// cache này gom các tra cứu trùng lặp để không gọi Cinemeta lặp lại từng dòng.
+const SMART_META_CACHE = {};
+const SMART_META_TTL = 10 * 60 * 1000; // 10 phút
+
+// ==========================================
 // CẤU HÌNH ĐỊA CHỈ TRẠM CÀO DỮ LIỆU
 // ==========================================
 const isProduction = process.env.NODE_ENV === "production";
@@ -383,9 +391,21 @@ async function getSmartMeta(type, argsId) {
         // Thêm điều kiện type != "none". TH lấy thông tin cho Stream chỉ cần rả từ argsId là đủ
         // 🚀 ƯU TIÊN 1: Nếu Prowlarr cấp mã IMDb ID hợp lệ, gọi thẳng Cinemeta tra cứu thông tin chuẩn rạp
         if (imdbIdFromProwlarr && imdbIdFromProwlarr !== "none" && imdbIdFromProwlarr.startsWith("tt") && type != "none") {
-            console.log(`[CINEMETA LOOKUP VIA IMDB] Đang gọi Cinemeta API cho phim có mã ID: ${imdbIdFromProwlarr}`);        
-            const metaRes = await axios.get(cinemetaUrl, { timeout: 3000 }).catch(() => null);
-            const item = metaRes?.data?.meta;
+            // Kiểm tra bộ đệm RAM trước khi gọi mạng
+            const metaCacheKey = `${type}_${imdbIdFromProwlarr}`;
+            const cachedEntry = SMART_META_CACHE[metaCacheKey];
+            let item = null;
+            if (cachedEntry && (Date.now() - cachedEntry.timestamp < SMART_META_TTL)) {
+                item = cachedEntry.item;
+                console.log(`[CINEMETA RAM HIT] Bốc meta phim ${imdbIdFromProwlarr} từ bộ đệm, không gọi mạng.`);
+            } else {
+                console.log(`[CINEMETA LOOKUP VIA IMDB] Đang gọi Cinemeta API cho phim có mã ID: ${imdbIdFromProwlarr}`);
+                const metaRes = await axios.get(cinemetaUrl, { timeout: 3000 }).catch(() => null);
+                item = metaRes?.data?.meta;
+                if (item) {
+                    SMART_META_CACHE[metaCacheKey] = { timestamp: Date.now(), item };
+                }
+            }
 
             if (item) {
                 console.log(`[SMART META SUCCESS] Đã lấy thành công data chuẩn rạp từ Cinemeta cho: ${item.name}`);
@@ -482,12 +502,10 @@ function parseHtmlToTorrents(htmlData) {
             // 🌟 2. BÓC LINK MAGNET (CỘT 4 - INDEX 3)
             // Tìm chính xác thẻ 'a' có thuộc tính href bắt đầu bằng chuỗi "magnet:"
             const magnetCell = $(cells[3]);
-            const magnetUrl = magnetCell.find("a[href^='magnet:']").attr("href");
-
-            // Nếu thiếu magnet, tự dựng magnet chuẩn bằng infoHash
-            if (!magnetUrl) {
-                magnetUrl = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}`;
-            }
+            let magnetUrl = magnetCell.find("a[href^='magnet:']").attr("href");
+            // (Không dựng magnet tại đây: infoHash chỉ được trích xuất ở bước 5 bên dưới.
+            // Code cũ gán lại magnetUrl đang là const -> TypeError, và đọc infoHash
+            // trước khi khai báo let -> ReferenceError.)
 
             // 🌟 3. BÓC DUNG LƯỢNG SIZE (CỘT 5 - INDEX 4)
             const sizeText = $(cells[4]).text().trim();
@@ -507,7 +525,8 @@ function parseHtmlToTorrents(htmlData) {
 
             // 🌟 5. TRÍCH XUẤT MÃ BẰM INFOHASH VIẾT THƯỜNG TỪ LUỒNG MAGNET LINK
             let infoHash = null;
-            const hashMatch = magnetUrl.match(/btih:([a-fA-F0-9]{40})/i);
+            // Bảo vệ: nếu magnet bị thiếu, tránh TypeError khi gọi .match trên undefined
+            const hashMatch = (magnetUrl || "").match(/btih:([a-fA-F0-9]{40})/i);
             infoHash = hashMatch ? hashMatch[1].toLowerCase() : null;
 
             const indexer = "The Pirate Bay";
@@ -560,14 +579,18 @@ function parseHtmlToTorrents(htmlData) {
 
 //Hàm kiểm tra dữ liệu đầu vào đã được xử lý chưa
 function VerifyPackageData(rawData) {
-    let responseData = [];
-    if (!rawData || typeof rawData !== "string")
-        if(responseData.some(s => 'packedData' in s)) return rawData;
+    if (!rawData) return [];
 
-    responseData = rawData.data;
+    // Chuẩn hóa đầu vào: chấp nhận mảng sẵn, object {data:[...]}, hoặc chuỗi HTML thô
+    // (code cũ đọc rawData.data ngay cả khi rawData là chuỗi -> luôn ném lỗi -> trả [])
+    if (typeof rawData === "string") {
+        return parseHtmlToTorrents(rawData);
+    }
+    let responseData = Array.isArray(rawData) ? rawData : rawData.data;
+    if (!Array.isArray(responseData)) return [];
 
     //Nếu dữ liệu đã tồn tại biến packedData: tạm cho là đã được verify nên bỏ qua không cần check lại
-    if (responseData && responseData.some(s => 'packedData' in s) ) return responseData;
+    if (responseData.some(s => s && 'packedData' in s) ) return responseData;
     try {
 
         let torrents = [];
@@ -575,25 +598,25 @@ function VerifyPackageData(rawData) {
         const verifiedData =   responseData.map(t => {
 
                 const title = t.name;
-                const size = t.size;
+
+                // Xử lý dung lượng: API có thể trả chuỗi ("4.5 GiB"), số byte thuần, hoặc thiếu.
+                // (code cũ gọi size.match nên ném TypeError khi size là số -> mất trắng cả trang)
                 let sizeInGB = "0.00";
-                
-                let sizeVal = "0.00";
-                let sizeUnit = "";
-                //const sizeUnit = sizeMatch[2].toUpperCase();
-                //sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
-                // Xử lý chuỗi dung lượng bằng Regex (Ví dụ: "4.5 GiB" hoặc "450 MiB")
-                const sizeMatch = size.match(/(\d+\.\d+|\d+)\s*(GiB|MiB|GB|MB)/i);
-                if (sizeMatch) {
-                    sizeVal = parseFloat(sizeMatch[1]);
-                    sizeUnit = sizeMatch[2].toUpperCase() || "";
-                    sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
+                const rawSize = t.size;
+                if (typeof rawSize === "number" && !isNaN(rawSize)) {
+                    // Số thuần: coi là byte và quy đổi sang GB
+                    sizeInGB = (rawSize / 1024 / 1024 / 1024).toFixed(2);
+                } else {
+                    const sizeMatch = String(rawSize || "").match(/(\d+(?:\.\d+)?)\s*(GiB|MiB|GB|MB)/i);
+                    if (sizeMatch) {
+                        const sizeVal = parseFloat(sizeMatch[1]);
+                        const sizeUnit = sizeMatch[2].toUpperCase();
+                        sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
+                    } else {
+                        const sizeVal = parseFloat(rawSize);
+                        if (!isNaN(sizeVal)) sizeInGB = (sizeVal / 1024 / 1024 / 1024).toFixed(2);
+                    }
                 }
-                else {
-                    sizeVal = parseFloat(size);
-                    sizeInGB = sizeUnit.includes("G") ? sizeVal.toFixed(2) : (sizeVal / 1024).toFixed(2);
-                }
-                //sizeInGB = (sizeVal / 1024).toFixed(2);
 
                 const seeders = t.seeders;
                 const leechers = t.leechers;
@@ -625,7 +648,13 @@ function VerifyPackageData(rawData) {
                     resolution = "SD";
                 }
 
+                // Chuẩn hóa IMDb ID: số thô -> tt0000123; thiếu -> "none"
+                // (code cũ nhét chuỗi "undefined" vào packedData khi API không trả imdb)
                 let rawImdb = t.imdb;
+                if (rawImdb && !String(rawImdb).startsWith("tt")) {
+                    rawImdb = `tt${String(rawImdb).padStart(7, '0')}`;
+                }
+                if (!rawImdb) rawImdb = "none";
 
                 // Ngăn cách bằng ký tự đặc biệt "||" để dễ bóc tách bằng lệnh .split() sau này
                 const packedData = `${title}||${sizeInGB}||${seeders}||${leechers}||${indexer}||${resolution}||${rawImdb}`;
@@ -643,7 +672,10 @@ function VerifyPackageData(rawData) {
                 };
             });
             
-            torrents = verifiedData;
+            // Lọc bỏ các dòng map trả về undefined (thiếu info_hash).
+            // Nếu để lọt, String(t.infoHash) trong addon.js sẽ ném TypeError
+            // và làm sập toàn bộ trang catalog thay vì chỉ bỏ qua dòng lỗi.
+            torrents = verifiedData.filter(t => t !== null && t !== undefined);
 
             //console.log(`[CELL PARSER SUCCESS] Trích xuất thành công ${torrents.length} dòng phim dựa trên thuật toán sơ đồ 8 cột.`);
             return torrents;

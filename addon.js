@@ -1,7 +1,7 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 const axios = require("axios");
 const { scrapeTPB, getProwlarrMetaByHash, getSmartMeta } = require("./Util");
-const { getTorBoxLink, checkTorBoxCacheBulk, decryptToken } = require("./torbox");
+const { checkTorBoxCacheBulk, decryptToken, decodeBase64 } = require("./torbox");
 
 
 // ======================================================================
@@ -9,12 +9,29 @@ const { getTorBoxLink, checkTorBoxCacheBulk, decryptToken } = require("./torbox"
 // ======================================================================
 // Đặt biến ở ngoài hàm để Node.js ghim cứng dữ liệu vào RAM Docker Container liên tục 24/7
 const CATALOG_CACHE_STORE = {};
-const CACHE_TIMEOUT = 3 * 60 * 1000; // Định mức thời gian sống: 3 phút (180000 ms)
+// Định mức thời gian sống: 3 phút (180000 ms)
+const CACHE_TIMEOUT = 3 * 60 * 1000;
+
+// 🌟 BỘ ĐỆM PHÂN TRANG: Stremio gửi skip = tổng số card ĐÃ TRẢ VỀ trước đó và kỳ vọng
+// nhận đúng "cửa sổ" phần tử bắt đầu từ vị trí skip. Code cũ quy đổi skip/30 sang
+// trang TPB rồi trả gộp 4 trang (~120 phần tử) mỗi lần -> số trả về không khớp số
+// skip tăng lên -> trùng lặp / bỏ sót item giữa các lần cuộn.
+// Cách mới: cache DANH SÁCH GỘP theo (catalog + từ khóa), cào thêm trang TPB khi
+// cửa sổ [skip, skip+100) chưa đủ dữ liệu, rồi cắt đúng slice trả về.
+const PAGED_CATALOG_CACHE = {};
+const CATALOG_PAGE_SIZE = 100;   // số card trả về cho mỗi lần cuộn của Stremio
+const CATALOG_FETCH_BATCH = 4;   // mỗi lượt thiếu dữ liệu, cào thêm N trang TPB
+const CATALOG_MAX_PAGES = 40;    // trần an toàn: tối đa số trang TPB cào cho 1 từ khóa
 
 
 // Danh sách các thể loại phim cốt lõi luôn luôn hiển thị (Giữ nguyên của bạn)
 const CORE_GENRES = ["All", "Action", "Comedy", "Horror", "Sci-Fi"];
 const YEAR_OPTIONS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"];
+
+// Trọng số độ phân giải phục vụ thuật toán sắp xếp luồng.
+// Phải nằm ở module scope: block-scoped const bên trong nhánh if (series)
+// sẽ gây ReferenceError tại hàm sort ở cuối defineStreamHandler.
+const resolutionWeights = { "4K": 40, "1080p HDR": 35, "1080p": 30, "720p": 20, "SD": 10 };
 
 const manifest = {
     id: "community.tpbconfigurableaddon",
@@ -78,9 +95,10 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 
-let showAdultConfig = "false";
-let IS_TORBOX_VIP =  "false";
-let userToken = "none";
+// GHI CHÚ: Không dùng biến toàn cục userToken/showAdultConfig nữa.
+// Trên server dùng chung, biến toàn cục khiến token TorBox của người dùng này
+// bị gán vào luồng phát của người dùng khác. Token được bóc riêng cho TỪNG request
+// khỏi args.id (middleware server.js đã nhúng cấu hình vào đuôi URL catalog/stream).
 
 builder.defineResourceHandler("addon_catalog", async (args) => {
     // Log ra Terminal để kiểm tra xem người dùng đang click vào tab nào ở ô số 1
@@ -103,6 +121,9 @@ builder.defineCatalogHandler(async (args) => {
     const catalogBaseId = idParts[0];
     console.log(`[CATALOG] Đang gọi danh mục: ${catalogBaseId}`);
 
+    // Bóc cấu hình NGUYÊN TRẮC TIẾNG theo request này (không đụng biến toàn cục)
+    let showAdultConfig = "false";
+    let userToken = "none";
     idParts.forEach(part => {
         if (part.includes("show_adult=true")) showAdultConfig = "true";
         if (part.includes("torbox_token=")) {
@@ -115,7 +136,8 @@ builder.defineCatalogHandler(async (args) => {
     
 
     // Nếu người dùng cố tình tìm cách truy cập tab Adult khi cấu hình đang tắt, chặn đứng lập tức
-    if (catalogBaseId === "tpb_adult" && !showAdultConfig) {
+    // So sánh chuỗi trực tiếp: !showAdultConfig trên chuỗi "false" luôn sai nên guard cũ không chặn được
+    if (catalogBaseId === "tpb_adult" && showAdultConfig !== "true") {
         console.log("[SECURITY BLOCK] Chặn truy cập danh mục Adult 18+ theo cấu hình hệ thống.");
         return { metas: [] };
     };
@@ -126,17 +148,11 @@ builder.defineCatalogHandler(async (args) => {
     // }
 
     // BÓC TÁCH THAM SỐ PHÂN TRANG: Nếu mới vào thì skip = 0 (Trang 1)
+    // skip là SỐ CARD ĐÃ TRẢ VỀ trong các response trước đó (chuẩn Stremio)
     const skip = (args.extra && args.extra.skip) ? parseInt(args.extra.skip) : 0;
-    
-    // Quy đổi số lượng phần tử bỏ qua sang số TRANG chuẩn (Mỗi trang có 100 phim)
-    // skip = 0 -> page = 1; skip = 100 -> page = 2; skip = 200 -> page = 3
-    const targetPage = Math.floor(skip / 100) + 1;
-    const basePage = Math.floor(skip / 30) + 1; // Tính ra trang bắt đầu của PirateBay
+
     const selectedYear = (args.extra && args.extra.genre) ? args.extra.genre : "2026";
 
-    let torrents = [];
-    let allTorrents = [];
-    
     let searchQuery ="2026";
     let tpbCategory = 200; 
 
@@ -192,31 +208,67 @@ builder.defineCatalogHandler(async (args) => {
 
     // }
     tpbCategory = (catalogBaseId === "tpb_adult") ? "500" : "200";
+
+    // 🌟 PHÂN TRANG CHUẨN STREMIO: skip = số card đã trả về, ta trả đúng cửa sổ
+    // [skip, skip + CATALOG_PAGE_SIZE). Danh sách gộp được giữ trong PAGED_CATALOG_CACHE
+    // và tự cào thêm trang TPB khi cửa sổ vượt quá dữ liệu đang có.
+    const pagedKey = `${catalogBaseId}_${searchQuery}_${tpbCategory}`;
+    const pagedEntry = PAGED_CATALOG_CACHE[pagedKey]
+        ? PAGED_CATALOG_CACHE[pagedKey]
+        : (PAGED_CATALOG_CACHE[pagedKey] = { timestamp: Date.now(), items: [], nextTpbPage: 1, exhausted: false });
+
+    // Hết hạn 3 phút (đồng bộ CACHE_TIMEOUT) thì reset danh sách gộp để cào lại từ đầu
+    if (Date.now() - pagedEntry.timestamp >= CACHE_TIMEOUT) {
+        pagedEntry.timestamp = Date.now();
+        pagedEntry.items = [];
+        pagedEntry.nextTpbPage = 1;
+        pagedEntry.exhausted = false;
+    }
+
+    const wantedEnd = skip + CATALOG_PAGE_SIZE;
     try {
-        
-        console.log(`[CATALOG PAGINATION] Gộp trang ngầm: Đang cào liên tiếp từ Trang ${basePage} đến Trang ${basePage + 3} của PirateBay...`);
-        
-        // Gọi liên tiếp 4 trang chạy song song bằng Promise.all để tối ưu tốc độ phản hồi cực nhanh
-        const pagePromises = [
-            scrapeTPB(searchQuery, tpbCategory, basePage),
-            scrapeTPB(searchQuery, tpbCategory, basePage + 1),
-            scrapeTPB(searchQuery, tpbCategory, basePage + 2),
-            scrapeTPB(searchQuery, tpbCategory, basePage + 3)
-        ];
+        while (
+            pagedEntry.items.length < wantedEnd &&
+            !pagedEntry.exhausted &&
+            pagedEntry.nextTpbPage <= CATALOG_MAX_PAGES
+        ) {
+            const fetchFrom = pagedEntry.nextTpbPage;
+            console.log(`[CATALOG PAGINATION] Đang cào trang TPB ${fetchFrom} → ${fetchFrom + CATALOG_FETCH_BATCH - 1} (đã có ${pagedEntry.items.length} item, cần tới ${wantedEnd})...`);
 
-        const pagesResults = await Promise.all(pagePromises);
-        
-        // Gộp tất cả các mảng dữ liệu của 4 trang lại thành một mảng duy nhất
-        pagesResults.forEach(pageData => {
-            if (Array.isArray(pageData)) {
-                allTorrents = allTorrents.concat(pageData);
+            const pagePromises = [];
+            for (let p = fetchFrom; p < fetchFrom + CATALOG_FETCH_BATCH; p++) {
+                pagePromises.push(scrapeTPB(searchQuery, tpbCategory, p));
             }
-        });
+            const pagesResults = await Promise.all(pagePromises);
 
-        console.log(`[CATALOG] Gộp thành công! Tổng số torrent thu được từ tìm kiếm: ${allTorrents.length}`);
+            // Gộp các trang vào danh sách, lọc trùng infoHash (TPB thường trùng dòng giữa các trang)
+            const seen = new Set(pagedEntry.items.map(t => String(t.infoHash).toLowerCase()));
+            let newCount = 0;
+            pagesResults.forEach(pageData => {
+                if (!Array.isArray(pageData)) return;
+                pageData.forEach(t => {
+                    if (!t || !t.infoHash) return;
+                    const h = String(t.infoHash).toLowerCase();
+                    if (seen.has(h)) return;
+                    seen.add(h);
+                    pagedEntry.items.push(t);
+                    newCount++;
+                });
+            });
+
+            pagedEntry.nextTpbPage = fetchFrom + CATALOG_FETCH_BATCH;
+
+            // Trang TPB rỗng (hoặc toàn trùng) coi như đã cạn nguồn, ngừng cào thêm
+            if (newCount === 0) {
+                pagedEntry.exhausted = true;
+            }
+        }
+        console.log(`[CATALOG] Gộp thành công! Tổng số torrent gộp: ${pagedEntry.items.length} | Trả cửa sổ [${skip}, ${Math.min(wantedEnd, pagedEntry.items.length)})`);
     } catch (err) {
         console.error("[CATALOG SEARCH ERROR] Lỗi trong quá trình quét gộp danh mục:", err.message);
     }
+
+    const allTorrents = pagedEntry.items.slice(skip, skip + CATALOG_PAGE_SIZE);
 
 
     // 🌟 MẤU CHỐT 1: GOM TOÀN BỘ INFOHASH THEO PHIM ĐƯỢC LOAD LẦN ĐẦU THÀNH 1 MẢNG SẠCH
@@ -243,7 +295,11 @@ builder.defineCatalogHandler(async (args) => {
     // Đoạn cuối hàm map xuất danh sách Card của defineCatalogHandler:
     // TRONG FILE addon.js -> defineCatalogHandler
     const metas = allTorrents.map(async (t)  => {
-        
+
+        // Bảo vệ: dòng torrent thiếu infoHash/packedData sẽ bị bỏ qua (trả null)
+        // thay vì ném TypeError làm sập cả trang catalog
+        if (!t || !t.infoHash || !t.packedData) return null;
+
         const currentHash = String(t.infoHash).toLowerCase().trim();
         
         // Trích xuất thông tin khớp từ bảng bản đồ cache của TorBox trả về
@@ -383,9 +439,11 @@ builder.defineMetaHandler(async (args) => {
             console.log(`[META FALLBACK NETWORK] RAM trống. Gọi lại getSmartMeta cứu hộ mạng...`);
             const info = await getSmartMeta(args.type, args.id);
             if (info) {
+                // idParts đã được split("||") từ trước: idParts[1] chính là tiêu đề sạch,
+                // không cần (và không đúng khi) gọi .split("||")[0] lần nữa
                 const idParts = args.id.replace("tpb:", "").split("||");
-                const cleanTitle = idParts[1]?.split("||")[0] || "Unknown Movie";
-                const packedData = idParts[1] || "";
+                const cleanTitle = idParts[1] || "Unknown Movie";
+                const packedData = idParts.slice(1).join("||");
 
                 return {
                     meta: {
@@ -417,6 +475,18 @@ builder.defineMetaHandler(async (args) => {
 builder.defineStreamHandler(async (args) => {
     let allStreams = [];
     let imdbId = args.id;
+
+    // Bóc token được middleware nhúng vào đuôi URL stream (per-request).
+    // Nhờ vậy token của người dùng A không bao giờ rơi vào luồng của người dùng B
+    // dù server chạy chung một tiến trình. Nếu không có token -> fallback P2P an toàn.
+    let perRequestToken = "none";
+    let activeId = String(args.id);
+    const configSuffixMatch = activeId.match(/\|\|show_adult=[^|]*\|\|torbox_token=([^|]+)/);
+    if (configSuffixMatch) {
+        perRequestToken = configSuffixMatch[1] || "none";
+        activeId = activeId.replace(/\|\|show_adult=[^|]*\|\|torbox_token=[^|]*/, "");
+    }
+    imdbId = activeId;
     let seasonEpisodeSuffix = "";
 
     let emoji = "🎞️";
@@ -428,13 +498,13 @@ builder.defineStreamHandler(async (args) => {
 
 
     // 1. Xử lý luồng dữ liệu độc lập cho Catalog riêng của bạn
-    if (args.id && args.id.startsWith("tpb:"))
+    if (activeId && activeId.startsWith("tpb:"))
     {
-        // TRUYỀN NGUYÊN BIẾN args.id để rã gói lấy thông tin dựng cột bên phải
-        const info = await getSmartMeta("none", args.id);
-        
+        // TRUYỀN NGUYÊN BIẾN activeId để rã gói lấy thông tin dựng cột bên phải
+        const info = await getSmartMeta("none", activeId);
+
         if (!info) {
-            return { streams: [{ name: "🧲 [FALLBACK P2P]", title: "Lỗi giải mã cấu trúc dữ liệu.", infoHash: args.id.replace("tpb:", "").split("||")[0] }] };
+            return { streams: [{ name: "🧲 [FALLBACK P2P]", title: "Lỗi giải mã cấu trúc dữ liệu.", infoHash: activeId.replace("tpb:", "").split("||")[0] }] };
         }
 
         //test strem bằng url
@@ -446,9 +516,8 @@ builder.defineStreamHandler(async (args) => {
         // };
 
         const pureHash = info.hash; // Lấy mã hash sạch đã rã gói
-        const userTorBoxToken = userToken || "none";// process.env.CURRENT_TORBOX_TOKEN || "none";
-        const currentHost = process.env.HOST_URL || "localhost:7000";
-        
+        const userTorBoxToken = perRequestToken || "none";// process.env.CURRENT_TORBOX_TOKEN || "none";
+
 
 
         //console.log(`Token bị mã hoá: ${userTorBoxToken}`)
@@ -472,7 +541,9 @@ builder.defineStreamHandler(async (args) => {
                 //isCachedOnTorBox = cacheMap[pureHash].cached;
                 const cacheInfo = cacheMap[pureHash] || { cached: false, urlDirect: "" };
                 isCachedOnTorBox = cacheInfo.cached
-                urlDirect = decryptToken(cacheInfo.urlDirect);//giải mã
+                // Giải mã link CDN bằng decodeBase64 (KHÔNG dùng decryptToken -
+                // hàm đó chỉ chấp nhận UUID nên sẽ trả lại chuỗi base64 chưa giải)
+                urlDirect = decodeBase64(cacheInfo.urlDirect);
             } catch (err) {
                 console.error("[STREAM HANDLER CACHE CHECK ERROR]", err.message);
                 isCachedOnTorBox = false;
@@ -534,8 +605,8 @@ builder.defineStreamHandler(async (args) => {
     }
 
     // Luồng phim/series đồng bộ từ Cinemeta của Stremio
-    if (args.type === "series" && args.id.includes(":")) {
-        const parts = args.id.split(":");
+    if (args.type === "series" && activeId.includes(":")) {
+        const parts = activeId.split(":");
         imdbId = parts[0]; 
         const season = String(parts[1]).padStart(2, '0');
         const episode = String(parts[2]).padStart(2, '0');
@@ -561,7 +632,27 @@ builder.defineStreamHandler(async (args) => {
             console.error("[STREAM ERROR]", e.message);
         }
 
-        const resolutionWeights = { "4K": 40, "1080p HDR": 35, "1080p": 30, "720p": 20, "SD": 10 };
+        // resolutionWeights đã được dời lên module scope (tránh ReferenceError ở hàm sort)
+
+        if (allStreams.length === 0) {
+            return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp."}] };
+        }
+    }
+
+    // Luồng phim LẺ (movie) đồng bộ từ Cinemeta của Stremio
+    // (Trước đây nhánh này không tồn tại: request movie(tt...) rơi xuống dưới với
+    // allStreams rỗng và trả về danh sách stream trống)
+    if (args.type === "movie" && /^tt\d+/.test(activeId)) {
+        try {
+            const metaUrl = `https://cinemeta-live.strem.io/meta/movie/${activeId}.json`;
+            const metaResponse = await axios.get(metaUrl);
+            if (metaResponse.data && metaResponse.data.meta) {
+                const movieTitle = metaResponse.data.meta.name;
+                allStreams = await scrapeTPB(movieTitle, 200, 1);
+            }
+        } catch (e) {
+            console.error("[STREAM MOVIE ERROR]", e.message);
+        }
 
         if (allStreams.length === 0) {
             return { streams: [{ name: "TPB Tracker", title: "Không tìm thấy nội dung phù hợp."}] };
@@ -569,8 +660,7 @@ builder.defineStreamHandler(async (args) => {
     }
 
     // Lấy mã Token của TorBox trích xuất từ URL chạy ngầm
-    const userTorBoxToken = userToken || "none";
-    const currentHost = process.env.HOST_URL || "localhost:7000";
+    const userTorBoxToken = perRequestToken || "none";
 
     // ======================================================================
     // KỊCH BẢN A: NGƯỜI DÙNG KHÔNG CÓ TORBOX VIP (KHÔNG NHẬP KEY / CHẠY TORRENT THƯỜNG)
@@ -621,7 +711,7 @@ builder.defineStreamHandler(async (args) => {
                 //const directPlayUrl = `http://${currentHost}/play/torbox/${currentHash}/${userTorBoxToken}?magnet=${encodedMagnet}`;
                 //console.log(`directPlayUrl: ${directPlayUrl}`)
                 
-                urlDirect = decryptToken(cacheInfo.urlDirect);//Lấy link trực tiếp;
+                urlDirect = decodeBase64(cacheInfo.urlDirect);//Lấy link trực tiếp;
                 //console.log(`directPlayUrl: ${directPlayUrl}`)
                 if(isCachedOnTorBox)
                 {

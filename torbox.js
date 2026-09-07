@@ -5,6 +5,34 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 
 
+// Token gốc của TorBox là UUID chuẩn: 36 ký tự, 4 dấu gạch ngang
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * HÀM RIÊNG: Giải mã base64 THÔNG THƯỜNG dùng cho các giá trị KHÔNG phải token
+ * (ví dụ urlDirect: link CDN TorBox được btoa() đóng gói ở hàng đợi torboxBulkQueue).
+ * KHÔNG dùng decryptToken cho việc này: decryptToken chỉ chấp nhận kết quả UUID
+ * nên link CDN sau giải mã sẽ bị loại và trả về chuỗi base64 chưa giải -> Stremio
+ * nhận base64 rác làm url phát -> Playback Error.
+ * @param {string} encoded - Chuỗi base64 (đã mất đệm "=" hoặc dạng base64url)
+ * @returns {string} Chuỗi gốc đã giải mã (hoặc đầu vào nếu không giải được)
+ */
+function decodeBase64(encoded) {
+    if (!encoded || encoded === "none") return "none";
+    const trimmed = String(encoded).trim();
+    try {
+        // Chuẩn hóa base64url về base64 chuẩn rồi bù đệm "="
+        let base64Str = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+        base64Str = base64Str.padEnd(base64Str.length + (4 - base64Str.length % 4) % 4, '=');
+        const decoded = Buffer.from(base64Str, 'base64').toString('utf8').trim();
+        // Chỉ trả kết quả nếu giải ra chuỗi hợp lệ có dấu vết của URL
+        return decoded || trimmed;
+    } catch (e) {
+        console.warn("[DECODE BASE64 WARNING] Không giải mã được chuỗi:", e.message);
+        return trimmed;
+    }
+}
+
 /**
  * HÀM MỚI: Tách riêng logic giải mã Token Base64 an toàn
  * @param {string} tokenInput - Chuỗi mã Token (có thể đã mã hóa hoặc chuỗi gốc)
@@ -12,23 +40,31 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  */
 function decryptToken(tokenInput) {
     if (!tokenInput || tokenInput === "none") return "none";
-    
-    // Nếu token đã là định dạng gốc (chứa dấu gạch ngang chuẩn UUID), bỏ qua không giải mã
-    if (tokenInput.includes("-")) {
-        return tokenInput.trim();
+
+    // Nếu token đã là UUID gốc thì bỏ qua không giải mã.
+    // KHÔNG dò bằng includes("-"): chuỗi base64url cũng chứa dấu "-",
+    // sẽ nhận nhầm token đã mã hóa là token gốc.
+    const trimmedInput = tokenInput.trim();
+    if (UUID_PATTERN.test(trimmedInput)) {
+        return trimmedInput;
     }
 
     try {
+        // Chuẩn hóa base64url ( - + và _ / ) về base64 chuẩn trước khi giải mã
+        let base64Str = trimmedInput.replace(/-/g, "+").replace(/_/g, "/");
+
         // Thêm lại đệm padding dấu '=' cho Base64 nếu bị thiếu trong quá trình Stremio truyền URL
-        let base64Str = tokenInput.trim();
         base64Str = base64Str.padEnd(base64Str.length + (4 - base64Str.length % 4) % 4, '=');
-        
+
         const decrypted = Buffer.from(base64Str, 'base64').toString('utf8');
-        //console.log(`Mã token: ${decrypted}`)
-        return decrypted.trim();
+        // Chỉ chấp nhận kết quả giải mã nếu ra đúng UUID; nếu không thì trả token thô gốc
+        if (UUID_PATTERN.test(decrypted.trim())) {
+            return decrypted.trim();
+        }
+        return trimmedInput;
     } catch (e) {
         console.warn("[TORBOX DECRYPT WARNING] Không thể giải mã chuỗi, thử dùng Token thô gốc:", e.message);
-        return tokenInput.trim();
+        return trimmedInput;
     }
 }
 
@@ -289,7 +325,9 @@ async function getTorBoxLink(infoHash, torboxToken, magnetLink) {
 
     try {
         const cacheMap = await checkTorBoxCacheBulk(hash, torboxToken);
-        const isCachedOnTorBox = cacheMap[hash] === true;
+        // checkTorBoxCacheBulk trả về object { cached, urlDirect, ... } cho mỗi hash,
+        // không phải boolean — so sánh === true cũ luôn sai nên nhánh cached không bao giờ chạy
+        const isCachedOnTorBox = cacheMap[hash] && cacheMap[hash].cached === true;
 
         // ======================================================================
         // KỊCH BẢN 1: FILE ĐÃ CACHED SẴN -> BỐC PHIM CÔNG CỘNG BẰNG MAGNET LINK
@@ -308,7 +346,7 @@ async function getTorBoxLink(infoHash, torboxToken, magnetLink) {
                 
                 if (videoFiles.length > 0) {
                     videoFiles.sort((a, b) => (b.size || b.bytes || 0) - (a.size || a.bytes || 0));
-                    const targetFile = videoFiles;
+                    const targetFile = videoFiles[0]; // Lấy FILE LỚN NHẤT (phần tử đầu sau sort), không phải cả mảng
                     const fileIndex = filesList.findIndex(f => f.name === targetFile.name);
                     const cleanIndex = fileIndex >= 0 ? fileIndex : 0;
 
@@ -357,4 +395,4 @@ async function getTorBoxLink(infoHash, torboxToken, magnetLink) {
     }
 }
 
-module.exports = { getTorBoxLink, checkTorBoxCacheBulk, decryptToken};
+module.exports = { getTorBoxLink, checkTorBoxCacheBulk, decryptToken, decodeBase64};

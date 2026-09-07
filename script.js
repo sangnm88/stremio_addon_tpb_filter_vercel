@@ -7,6 +7,15 @@ let qrcodeInstance = null;
 
 // Khởi tạo mã QR Code mặc định sau khi toàn bộ tài nguyên trang được tải
 window.addEventListener("DOMContentLoaded", () => {
+    // Chống sập trang: nếu thư viện QRCode chưa được nạp (file /qrcode.js thiếu hoặc lỗi)
+    // thì ẩn khung QR thay vì để exception giết chết toàn bộ phần script còn lại
+    if (typeof QRCode === "undefined") {
+        console.warn("[QR] Thư viện QRCode chưa được nạp (thiếu /qrcode.js) - tạm ẩn khung mã QR.");
+        const qrSection = document.querySelector(".qr-section");
+        if (qrSection) qrSection.style.display = "none";
+        return;
+    }
+
     const qrcodeContainer = document.getElementById("qrcode");
     if (qrcodeContainer) {
         // 🌟 TỰ ĐỘNG: Lấy giao thức hiện tại (http:// hoặc https://) để sinh QR ban đầu
@@ -84,7 +93,9 @@ function generateConfigUrl(protocolPrefix) {
     const token = document.getElementById("token").value || "none";
     const showAdult = document.getElementById("adult_content").checked ? "true" : "false";
     const currentHost = window.location.host;
-    const encryptedToken = btoa(token).replace(/=/g, ""); 
+    // Mã hóa dạng base64url (thay + -> - và / -> _): chuỗi base64 chuẩn có thể chứa "/"
+    // và bị server cắt cụt tại dấu "/" khi bóc token khỏi URL cấu hình
+    const encryptedToken = btoa(token).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
     
     // Kiểm tra xem người dùng có tích chọn muốn tùy biến thể loại nâng cao hay không
     const isCustomizeEnabled = document.getElementById("enable_customize_genres").checked;

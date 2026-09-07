@@ -9,6 +9,10 @@ const path = require("path");
 const addonInterface = require("./addon");
 const { getTorBoxLink } = require("./torbox");
 
+// Dựng router của Stremio SDK MỘT LẦN duy nhất lúc khởi động.
+// (Tạo mới getRouter() cho từng request như trước đây vừa chậm vừa gây rò rỉ bộ nhớ)
+const stremioRouter = getRouter(addonInterface);
+
 const app = express();
 const PORT = process.env.PORT || 7000;
 
@@ -179,7 +183,10 @@ app.get("/play/torbox/:hash/:token", async (req, res) => {
     
     console.log(`\n[PLAY REQUEST] Người dùng bấm xem phim! Đang bẻ khóa luồng phát cho hash: ${hash}`);
 
-    process.env.HOST_URL = req.get('host');
+    // GHI CHÚ: trước đây dòng này ghi process.env.HOST_URL = req.get('host') -
+    // mutate biến môi trường CHUNG theo từng request, gây race khi nhiều người
+    // xem phim cùng lúc. Host chỉ dùng nội bộ route này nên chuyển thành biến cục bộ.
+    const currentHost = req.get('host');
 
     if (!token || token === "none") {
         return res.redirect(`magnet:?xt=urn:btih:${hash}`);
@@ -276,7 +283,7 @@ app.use((req, res, next) => {
     }
 
 
-    if (urlPath.includes("/catalog/") && urlPath.includes("torbox_token=")) {
+    if ((urlPath.includes("/catalog/") || urlPath.includes("/stream/")) && urlPath.includes("torbox_token=")) {
         try {
             const decodedPath = decodeURIComponent(urlPath);
             const URLParts = decodedPath.split("|");
@@ -293,14 +300,34 @@ app.use((req, res, next) => {
                 }
             });
 
-            const suffix = `||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}.json`;
+            const configSuffix = `||show_adult=${showAdultVal}||torbox_token=${torboxTokenVal}`;
             const activeCatalogIds = ["tpb_all", "tpb_action", "tpb_comedy", "tpb_horror", "tpb_scifi", "tpb_adult"];
             for (const id of activeCatalogIds) {
-                //console.log(`[MASTER ROUTER] Catalog ID Độc lập: ${req.url}`)
-                if (req.url.includes(`${id}.json`)) {
-                    req.url = req.url.replace(`${id}.json`, `${id}${suffix}`);
+                // ⚠️ FIX QUAN TRỌNG: Stremio gửi URL catalog ở 2 dạng:
+                //   Dạng 1 (không extra):  /catalog/movie/tpb_all.json
+                //   Dạng 2 (CÓ extra):     /catalog/movie/tpb_all/genre=2026.json
+                //     (extra = genre=/skip=/search=... xuất hiện khi người dùng chọn năm/thể loại,
+                //      chuyển danh mục, hoặc cuộn phân trang)
+                // Code cũ chỉ dò chuỗi "tpb_all.json" nên Dạng 2 không bao giờ khớp -> config
+                // không được nhúng vào ID -> show_adult luôn tụt về false khi chuyển danh mục.
+                if (req.url.includes(`${id}/`)) {
+                    // Dạng 2: chèn config ngay sau ID, TRƯỚC segment extra
+                    req.url = req.url.replace(`${id}/`, `${id}${configSuffix}/`);
                     break;
                 }
+                if (req.url.includes(`${id}.json`)) {
+                    // Dạng 1: chèn config trước đuôi .json
+                    req.url = req.url.replace(`${id}.json`, `${id}${configSuffix}.json`);
+                    break;
+                }
+            }
+
+            // NHÚNG TOKEN VÀO ĐUÔI ID CỦA REQUEST STREAM:
+            // defineStreamHandler không nhận được req nên ta gắn cấu hình thẳng vào
+            // ID của stream (giống cơ chế nêu trên của catalog) để handler bóc token
+            // đúng của CHÍNH request này, thay vì đọc biến toàn cục hay dò theo IP.
+            if (urlPath.includes("/stream/") && req.url.endsWith(".json")) {
+                req.url = req.url.replace(/\.json$/, `${configSuffix}.json`);
             }
 
             // Gộp tất cả tham số nhúng thẳng vào cấu trúc Catalog ID hệ thống
@@ -316,7 +343,6 @@ app.use((req, res, next) => {
         }
     }
 
-    const stremioRouter = getRouter(addonInterface); 
     stremioRouter(req, res, next);
 });
 
